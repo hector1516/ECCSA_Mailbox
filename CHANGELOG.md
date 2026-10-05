@@ -7,6 +7,47 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-05 — La firma guardaba una URL donde debía guardar un `cid:`
+
+El peor bug de esta tanda, porque no daba ningún error y rompía el envío.
+
+Subir una imagen a una firma insertaba en el editor `r.url` (la URL con token
+`/api/sigimg/...`) en vez de `r.html` (que lleva `src="cid:..."`). Y como
+`guardar()` persiste el `innerHTML` del editor, **la URL quedaba guardada dentro
+de la firma**. Al enviar, el worker busca los `cid:` del HTML para pegarle las
+imágenes como adjuntos inline, no encontraba ninguno, y mandaba el HTML tal cual:
+el destinatario veía la firma sin logo. Además la URL queda atada al host, así
+que cambiar de dominio la rompía para siempre —justo lo que advierte el
+comentario de `_cid_para`.
+
+El arreglo son las dos mitades, porque son dos cosas distintas y las dos hacen
+falta:
+
+- **Lo que se guarda lleva `cid:`** (el worker lo convierte en adjunto inline real,
+  que es lo único que funciona en todos los clientes de correo).
+- **Lo que se muestra lleva URL** (`_cid_a_url`, nuevo en el servidor): un `cid:`
+  no resuelve en el navegador, así que la vista previa lo necesita.
+
+La reescritura vive en el servidor y no en el cliente porque el servidor es quien
+tiene los tokens y quien decide qué es una imagen válida; y porque el mapa sale
+de la base, un `cid:` inventado por el usuario simplemente no se encuentra y se
+queda como estaba: sin imágenes, no con la imagen de otro.
+
+### 2026-10-05 — Sesiones: `UltimoUso` marcaba todas y no había cómo revocarlas
+
+- **`UltimoUso` se actualizaba por `IdUsuario`**, así que un request marcaba como
+  usadas **todas** las sesiones del usuario. La lista de dispositivos mostraba el
+  mismo `UltimoUso` en todas —que es justo lo que esa pantalla existe para
+  decir— y además cada request escribía en N filas.
+- **No existía forma de revocar una sesión concreta.** El endpoint `GET
+  /api/auth/sesiones` ya prometía en su docstring "cerrar la sesión en un teléfono
+  que se perdió", y lo único que había era `logout`, que revoca la sesión
+  **actual**. La lista era de adorno. Se agrega `DELETE /api/auth/sesiones/{id}`,
+  con `IdUsuario` en el WHERE (sin eso, adivinar un `Id` de sesión ajena —son
+  enteros correlativos— dejaría al usuario sin acceso) y 404 en vez de 403, para
+  no confirmar que ese Id existe.
+
+
 ### 2026-10-05 — Cuatro bugs que rompían funciones completas
 
 Ninguno daba error visible. Son de la clase que se descubre cuando alguien usa

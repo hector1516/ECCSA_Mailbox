@@ -95,7 +95,11 @@
 		clearTimeout(_t);
 		_t = setTimeout(async () => {
 			try {
-				const r = await api.post('/mailbox/firmas/previsualizar', { html: texto });
+				const r = await api.post('/mailbox/firmas/previsualizar', {
+					html: texto,
+					// Para que el servidor cambie `cid:` por la URL de la imagen.
+					id_firma: editando && editando !== 'nueva' ? Number(editando) : null
+				});
 				previsualizacion = r.html || '';
 			} catch {
 				previsualizacion = texto;
@@ -154,8 +158,16 @@
 			const fd = new FormData();
 			fd.append('archivo', archivo);
 			const r = await api.post(`/mailbox/firmas/${editando}/imagenes`, fd);
-			// En la vista previa va la URL; el HTML GUARDADO lleva cid:.
-			_insertar(`<img src="${r.url}" alt="${r.html.match(/alt="([^"]*)"/)?.[1] || 'imagen'}" style="max-width:100%">`);
+			// Se inserta `r.html`, que lleva `src="cid:..."`, y NO `r.url`.
+			//
+			// Insertar la URL y guardar el HTML del editor (que es lo que hace
+			// `guardar()` con `innerHTML`) metía una URL dentro de la firma
+			// guardada. Consecuencias: al enviar, el worker busca los `cid:` del
+			// HTML para pegarle las imágenes y no encuentra ninguno, así que el
+			// correo salía con la firma sin logo; y esa URL tampoco resolvería en
+			// el cliente de correo del destinatario. Además queda atada al host:
+			// cambiar de dominio la rompe para siempre.
+			_insertar(r.html);
 			avisar('Imagen agregada', 'success');
 		} catch (err) {
 			avisar(err.message || 'No se pudo subir la imagen', 'error', 6000);

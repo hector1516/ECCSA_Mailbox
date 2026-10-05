@@ -117,6 +117,14 @@ jobs:
       - name: Pruebas del sanitizador de HTML
         run: python3 tools/test_sanitizador.py
 
+      # ── Gate 3b-2: la frontera cid: / URL de las firmas ──────────────────
+      # Lo que se GUARDA lleva `cid:` y lo que se MUESTRA lleva URL. Cuando esa
+      # frontera se cruzó, los correos salían con la firma sin logo y sin un solo
+      # error: la URL se guardaba y el worker buscaba `cid:`, no encontraba nada
+      # y mandaba el HTML tal cual.
+      - name: Pruebas de firmas (cid, tokens y sanitizado)
+        run: python3 tools/test_firmas.py
+
       # ── Gate 3c: los manifests de la PWA ────────────────────────────────
       # Un manifiesto con un icono que no existe NO es un error de build: la PWA
       # instala y el ícono sale en blanco. Por eso se verifica que cada src

@@ -212,7 +212,8 @@ def _usuario_por_token(token: str) -> Optional[dict]:
     if not token:
         return None
     sesion = _una(
-        "SELECT IdUsuario, Expira, Activo FROM HUB_MailboxSesiones WHERE TokenHash = %s",
+        "SELECT Id, IdUsuario, Expira, Activo FROM HUB_MailboxSesiones "
+        "WHERE TokenHash = %s",
         (_hash_de(token),),
     )
     if not sesion or not sesion.get("Activo"):
@@ -229,10 +230,19 @@ def _usuario_por_token(token: str) -> Optional[dict]:
 
     # UltimoUso se actualiza como mucho una vez cada 5 minutos: escribirlo en
     # cada request convertiría una operación barata en un cuello de botella.
+    #
+    # El filtro es por `Id` de la SESIÓN y no por `IdUsuario`: con `IdUsuario` se
+    # marcaban como usadas TODAS las sesiones del usuario, con dos efectos
+    # malos. Uno visible: la lista de dispositivos muestra el mismo `UltimoUso` en
+    # todas, así que no dice cuál está realmente activo — que es justo lo que
+    # esa pantalla existe para decir. Y otro invisible: cada request escribía en
+    # todas las filas del usuario, así que "5 min sin escribir" se convertía en
+    # "5 min sin escribir × N sesiones".
+    ahora = datetime.now()
     _ejecuta(
         "UPDATE HUB_MailboxSesiones SET UltimoUso = %s "
-        "WHERE IdUsuario = %s AND (UltimoUso IS NULL OR UltimoUso < %s)",
-        (datetime.now(), usuario["Id"], datetime.now() - timedelta(minutes=5)),
+        "WHERE Id = %s AND (UltimoUso IS NULL OR UltimoUso < %s)",
+        (ahora, sesion["Id"], ahora - timedelta(minutes=5)),
     )
     return usuario
 
@@ -327,6 +337,34 @@ def auth_sesiones(usuario: dict = Depends(require_mailbox)):
             (usuario["Id"], datetime.now()),
         )
     }
+
+
+@app.delete("/api/auth/sesiones/{sesion_id}")
+def revocar_sesion(sesion_id: int, usuario: dict = Depends(require_mailbox)):
+    """
+    Revoca UNA sesión del usuario. Es el caso del teléfono perdido.
+
+    Sin esto, la lista de sesiones era de adorno: se veía el dispositivo
+    sospechoso y no había nada que hacer con él. La diferencia con Admon es
+    justamente esta — allá el token no tiene con qué revocarse.
+
+    El `IdUsuario` va en el WHERE y no se toma de la ruta: sin eso, adivinar un
+    `Id` de sesión ajeno (que son enteros correlativos) dejaría al usuario sin
+    acceso. Se marca `Activo=0` en vez de borrar la fila: queda el rastro de que
+    esa sesión existió, que es lo que sirve si hay que investigar un robo de
+    credenciales.
+    """
+    n = _ejecuta(
+        "UPDATE HUB_MailboxSesiones SET Activo = 0 "
+        "WHERE Id = %s AND IdUsuario = %s AND Activo = 1",
+        (sesion_id, usuario["Id"]),
+    )
+    if not n:
+        # 404 y no "ok": o la sesión no existe, o es de otro usuario, o ya
+        # estaba revocada. Un 403 "no es tuya" confirmaría que el Id existe, que
+        # es justo lo que no hay que confirmar.
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    return {"ok": True}
 
 
 # ── Usuario ───────────────────────────────────────────────────────────────────
@@ -844,18 +882,67 @@ def borrar_firma(firma_id: int, usuario: dict = Depends(require_mailbox)):
 
 class PrevisualizarReq(BaseModel):
     html: str = ""
+    # La firma que se está editando. Es opcional: sin ella no hay reescritura de
+    # `cid:`, y el preview sale sin imágenes. Se pasa porque el HTML guardado
+    # lleva SIEMPRE `cid:` (ver `_cid_para`) y un `cid:` no resuelve en el
+    # navegador: el preview necesita la URL, el correo enviado necesita el `cid`.
+    id_firma: Optional[int] = None
+
+
+def _cid_a_url(html: str, id_firma: Optional[int]) -> str:
+    """
+    Reescribe `src="cid:x"` a `src="/api/sigimg/<token>"` para la vista previa.
+
+    Solo para MOSTRAR. Lo que se guarda y lo que se envía sigue llevando `cid:`,
+    y es a propósito: al enviar, el worker convierte el `cid` en un adjunto inline
+    real, que es lo único que funciona en todos los clientes de correo. Guardar la
+    URL rompería el envío (el destinatario no resuelve `/api/sigimg/...`) y
+    además la haría inservible en cuanto cambiara el host.
+
+    El re.sub se hace sobre el HTML YA SANITIZADO, y el mapa sale de la base, así
+    que un `cid` inventado por el usuario simplemente no se encuentra y se queda
+    como estaba: sin imágenes, no con una imagen ajena.
+    """
+    if not html or "cid:" not in html or not id_firma:
+        return html
+    try:
+        filas = _filas(
+            "SELECT Cid, Token FROM HUB_MailboxFirmaImagenes "
+            "WHERE IdFirma = %s AND Token IS NOT NULL", (id_firma,))
+    except Exception:
+        return html
+    if not filas:
+        return html
+
+    mapa = {}
+    for f in filas:
+        cid = (f.get("Cid") or "").strip().strip("<>")
+        if cid:
+            mapa[cid] = f"/api/sigimg/{f['Token']}"
+
+    def _cambia(m):
+        return mapa[m.group(1)] if m.group(1) in mapa else m.group(0)
+
+    return re.sub(r'cid:([A-Za-z0-9._%+@-]+)', _cambia, html)
 
 
 @app.post("/api/mailbox/firmas/previsualizar")
 def previsualizar_firma(body: PrevisualizarReq, usuario: dict = Depends(require_mailbox)):
-    """Devuelve el HTML YA SANITIZADO.
+    """Devuelve el HTML YA SANITIZADO, con los `cid:` resueltos a URL.
 
     La vista de editar muestra la previsualización con ESTE resultado, no con lo
     que el usuario está escribiendo: así lo que ve es exactamente lo que se va
     a guardar y a enviar. Si el servidor cambiara la lista blanca más adelante,
     la previsualización muestra el cambio sin tocar el cliente.
+
+    Lo que se ve NO es lo que se guarda: el preview lleva URLs para que el
+    navegador pueda pedir las imágenes, y lo guardado lleva `cid:` para que el
+    worker pueda adjuntarlas. Esa diferencia es deliberada, y por eso la
+    reescritura vive en el servidor: el cliente nunca ve el token ni decide qué
+    es una imagen válida.
     """
-    return {"html": _sanitizar_html(body.html)}
+    limpio = _sanitizar_html(body.html)
+    return {"html": _cid_a_url(limpio, body.id_firma)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
