@@ -7,6 +7,46 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-05 — Importador de cuentas desde HUBMail
+
+`tools/importar_cuentas_hubmail.py` trae las cuentas del HUBMail viejo (MySQL)
+a `HUB_MailboxCuentas` (SQL Server), incluida la asignación de usuarios.
+
+**La contraseña se descifra con la llave vieja y se recifra con la nueva.** Las
+dos son Fernet y se ven igual, pero un token cifrado con A no lo descifra B. Por
+eso la credencial viaja de memoria a memoria, directa al INSERT: **nunca** se
+imprime ni se escribe en un archivo.
+
+Copiar el `PasswordEnc` tal cual es el error que esto evita: la cuenta quedaría
+dada de alta, el panel la mostraría en verde, y el worker fallaría al primer IMAP
+con un `InvalidToken` que no dice "la llave cambió".
+
+Otras decisiones:
+
+- **Todo entra como `PENDIENTE`**, nunca `ACTIVA`, aunque la cuenta funcionara en
+  HUBMail. La llave es distinta y el worker tiene que volver a validar; dar por
+  buena una cuenta sin probarla es una suposición que después cuesta una hora de
+  sincronización fallando.
+- **Una credencial ilegible no tumba el resto.** Se avisa y esa cuenta queda fuera
+  para capturarla a mano; las demás se importan.
+- **No se duplica una cuenta que ya existe**: el índice único de `Email` haría
+  fallar el INSERT sin decir qué cuenta es.
+- La asignación (`HUB_MailboxCuentasLinks`) va en la **misma transacción** que la
+  cuenta. Si la cuenta entra y la asignación no, queda una cuenta que nadie ve y
+  que el worker sincroniza al vacío: el peor estado posible, porque no se nota.
+- **La firma vieja no se migra.** En Mailbox las firmas son del usuario y se
+  asignan por cuenta (`HUB_MailboxFirmaCuentas`); migrarlas automáticamente
+  mezclaría dos modelos. Mejor a mano, desde la pantalla de firmas.
+
+Verificado contra `ECCSA_Admon_Pruebas` con MySQL simulado: 3 cuentas de entrada,
+una con la credencial rota (queda fuera, sin tumbar las otras), y el round trip
+completo — la contraseña descifrada con la llave **nueva** coincide con el
+original, y la llave vieja ya no la descifra.
+
+**Falta**: no se pudo ejecutar contra el MySQL real, que no es alcanzable desde
+aquí (ver `deploy/DEPLOY.md`).
+
+
 ### 2026-10-05 — Las respuestas automáticas no se podían crear
 
 La pestaña listaba las respuestas automáticas pero no había forma de **dar de
