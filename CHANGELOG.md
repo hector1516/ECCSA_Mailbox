@@ -43,8 +43,39 @@ una con la credencial rota (queda fuera, sin tumbar las otras), y el round trip
 completo — la contraseña descifrada con la llave **nueva** coincide con el
 original, y la llave vieja ya no la descifra.
 
-**Falta**: no se pudo ejecutar contra el MySQL real, que no es alcanzable desde
-aquí (ver `deploy/DEPLOY.md`).
+#### Ejecutado contra los datos reales
+
+El MySQL de HUBMail está **dentro** del contenedor `DBDocker` en ServerVM y no
+está publicado en ningún puerto, así que se volcó a un TSV y se importó con
+`--desde-archivo` (que queda como opción del script: evita abrir MySQL al mundo
+para una migración).
+
+Lo que salió al medir los datos, y que cambió el diseño del importador:
+
+**31 filas, 13 correos, 10 usuarios — y 12 de los 13 correos compartidos.** El
+alta de HUBMail era por usuario, así que una casilla compartida salía repetida
+con distinto `UserID`. Copiar filas habría dado 13 cuentas duplicadas (y el
+índice único de `Email` revienta en la duodécima) y, deduplicando sin más, se
+habría perdido el buzón de nueve de diez personas. Por eso el importador agrupa
+por dirección y guarda la lista **completa** de usuarios.
+
+Resultado en `ECCSA_Admon_Pruebas`: 13 cuentas, todas `PENDIENTE`, **0
+credenciales que no descifren** con la llave nueva, y los buzones por persona
+cuadran con los datos viejos.
+
+Dos cosas que conviene que revise una persona:
+
+- **`UserID 1` (IT Support) aparece en las 13 cuentas.** Es lo que dice el origen,
+  pero significa que esa cuenta ve todos los buzones. Si no es lo que quiere, se
+  quita desde el panel.
+- Los servidores **no son todos Gmail**: 11 de 13 son `imap.secureserver.net`
+  (Hostinger) y uno es `imap.infinitummail.com`, con SMTP en 465 (TLS implícito,
+  que el worker maneja). El importador toma los valores reales, no los defaults.
+
+`tools/test_importador.py` (gate 3b-5) fija dos cosas: que el volcado se lea bien
+y que **el cifrado del importador sea el mismo del worker**, comprobado
+descifrando cruzadamente — los tokens de Fernet llevan un IV aleatorio y nunca son
+iguales, así que comparar cadenas no probaría nada.
 
 
 ### 2026-10-05 — Las respuestas automáticas no se podían crear

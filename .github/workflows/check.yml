@@ -140,6 +140,18 @@ jobs:
       - name: Las migraciones se trocean bien
         run: python3 tools/test_migraciones.py
 
+      # ── Gate 3b-5: el importador de HUBMail ─────────────────────────────
+      # Su cifrado tiene que ser el MISMO que el del worker. Si divergieran, las
+      # cuentas importadas quedarían indescifrables y el síntoma sería un
+      # InvalidToken que no menciona la causa. El test descifra cruzadamente en
+      # vez de comparar cadenas, porque los tokens de Fernet llevan un IV
+      # aleatorio y nunca son iguales.
+      #
+      # Sin el repo de WorkersAdmon a mano, la parte cruzada se salta y solo se
+      # prueba el volcado y la descifrado de la llave vieja.
+      - name: El importador de HUBMail descifra y cifra bien
+        run: python3 tools/test_importador.py
+
       # ── Gate 3c: los manifests de la PWA ────────────────────────────────
       # Un manifiesto con un icono que no existe NO es un error de build: la PWA
       # instala y el ícono sale en blanco. Por eso se verifica que cada src

@@ -18,6 +18,19 @@ El error que esto evita: copiar el `PasswordEnc` tal cual. La cuenta quedaría d
 de alta, el panel la mostraría verde, y el worker fallaría al primer IMAP con un
 `InvalidToken` que no dice "la llave cambió".
 
+─── EL CASO REAL: CASILLAS COMPARTIDAS ────────────────────────────────────────
+
+En HUBMail el alta de una cuenta era POR USUARIO, así que una casilla compartida
+salía N veces con la misma dirección y distinto `UserID`. Al medir los datos
+reales: **31 filas, 13 correos y 10 usuarios**, y 12 de los 13 correos estaban
+compartidos.
+
+Eso obliga a agrupar por dirección y no a copiar filas. Una fila por entrada
+daría 31 cuentas, 13 de ellas duplicadas —y el índice único de `Email` reventaría
+en la duodécima— y, peor, si se deduplicara sin más, se perdería el acceso de
+nueve de diez personas. Cada cuenta importada lleva la lista COMPLETA de sus
+usuarios en `HUB_MailboxCuentasLinks`.
+
 ─── LO QUE SE IMPORTA Y LO QUE NO ──────────────────────────────────────────────
 
 De `HUBMAIL_Accounts`:
@@ -71,10 +84,86 @@ def _viejo():
     return Fernet, InvalidToken
 
 
-def _nuevo():
-    """`encrypt_secret` del worker: es la MISMA función que usará al desencolar."""
-    from mailbox_worker.crypto import encrypt_secret
-    return encrypt_secret
+def _nuevo(clave_nueva: str):
+    """
+    Cifra con la llave NUEVA, igual que hace el worker.
+
+    Se reimplementa Fernet en vez de importar `mailbox_worker.crypto` a propósito:
+    ese módulo vive en OTRO repo (WorkersAdmon) y este script tiene que poder
+    correr en una máquina que solo tenga este repo. Una importación cruzada
+    dejaría la migración atada a un clon que puede no estar.
+
+    Que sea "la misma función" es una responsabilidad, no una casualidad:
+    `tests/test_importador.py` compara esta implementación con la del worker
+    cuando el otro repo está presente, y falla si divergen. Si divergen, las
+    cuentas importadas quedan indescifrables y el error es un `InvalidToken` que
+    no dice "las dos implementaciones no coinciden".
+    """
+    from cryptography.fernet import Fernet
+    fernet = Fernet(clave_nueva.encode())
+
+    def cifrar(valor: str) -> str:
+        return fernet.encrypt((valor or "").encode()).decode()
+
+    return cifrar
+
+
+CAMPO_A_COLUMNA = [
+    "AccountID", "UserID", "EmailAddress", "DisplayName", "IMAPHost", "IMAPPort",
+    "SMTPHost", "SMTPPort", "Username", "PasswordEnc",
+]
+
+
+def _descifrar(contrasena_cifrada, llave, InvalidToken):
+    """Fernet → texto. None si no se puede, sin lanzar."""
+    try:
+        return llave.decrypt((contrasena_cifrada or "").encode()).decode()
+    except (InvalidToken, ValueError, TypeError):
+        return None
+
+
+def leer_de_archivo(ruta: str, llave_vieja: str):
+    """
+    Lee las cuentas de un TSV previamente volcado.
+
+    Existe por una razón práctica: el MySQL de HUBMail está DENTRO de un
+    contenedor en otra máquina y no está publicado en ningún puerto, así que no se
+    puede leer con PyMySQL desde donde corre este script. Volcar con
+
+        docker exec DBDocker mysql -uhubmail -p… -D HUBMAIL -N -B -e "SELECT …"
+
+    y pasar el archivo por `--desde-archivo` evita abrir la red de MySQL al mundo
+    solo para una migración.
+
+    El archivo lleva `PasswordEnc` cifrado, no la contraseña: el volcado se puede
+    tratar como el dato sensible que es, y este script es el único que lo abre.
+    """
+    from cryptography.fernet import Fernet, InvalidToken
+    llave = Fernet(llave_vieja.encode())
+    filas = []
+    with open(ruta, encoding="utf-8") as fh:
+        for num, linea in enumerate(fh, 1):
+            linea = linea.rstrip("\n").rstrip("\r")
+            if not linea.strip():
+                continue
+            partes = linea.split("\t")
+            if len(partes) != len(CAMPO_A_COLUMNA):
+                # Una línea mal partida se salta con aviso en vez de abortar: un
+                # volcado con un DisplayName que trae tabulador no debe dejar la
+                # importación a medias.
+                raise SystemExit(
+                    f"{ruta}:{num}: esperaba {len(CAMPO_A_COLUMNA)} columnas y "
+                    f"hay {len(partes)}. El volcado está incompleto.")
+            r = dict(zip(CAMPO_A_COLUMNA, partes))
+            r["IMAPPort"] = int(r["IMAPPort"] or 993)
+            r["SMTPPort"] = int(r["SMTPPort"] or 587)
+            r["AccountID"] = int(r["AccountID"] or 0)
+            r["UserID"] = int(r["UserID"] or 0)
+            r["_contrasena"] = _descifrar(r["PasswordEnc"], llave, InvalidToken)
+            if r["_contrasena"] is None:
+                r["_error"] = "credencial ilegible (no descifra con la llave vieja)"
+            filas.append(r)
+    return filas
 
 
 def leer_viejas(args):
@@ -134,23 +223,57 @@ def plan(args, viejas, cifrar):
         cur.execute("SELECT Id, Nombre, Email FROM HUB_Users WHERE Activo = 1")
         usuarios = {f["Id"]: f for f in cur.fetchall()}
 
+        # Se agrupa por dirección ANTES de decidir nada. Es el caso normal, no
+        # el raro: 12 de las 13 cuentas reales estaban compartidas.
+        por_correo = {}
         for v in viejas:
-            email = (v.get("EmailAddress") or "").strip()
-            where = "MySQL"
+            por_correo.setdefault((v.get("EmailAddress") or "").strip(), []).append(v)
+
+        for email, filas in por_correo.items():
+            # Las filas de la misma dirección deberían coincidir en host, puertos
+            # y credencial. Si NO coinciden, la última gana para no abortar, pero
+            # se avisa: dos filas con la misma dirección y distinto servidor
+            # significan que alguien editó mal una de las dos.
+            Hosts = {(f.get("IMAPHost"), f.get("IMAPPort"), f.get("SMTPHost"),
+                      f.get("SMTPPort")) for f in filas}
+            if len(Hosts) > 1:
+                avisos.append(f"{email}: {len(filas)} filas con servidores "
+                              f"distintos ({Hosts}); se usa la última. Revísala.")
+            v = filas[-1]
             if v.get("_error"):
                 avisos.append(f"{email}: {v['_error']} — NO se importa, hay que "
                               f"capturarla a mano")
                 continue
             if not email or not v.get("_contrasena"):
-                avisos.append(f"{where}: sin correo o sin contraseña")
+                avisos.append(f"{email or '(sin correo)'}: sin correo o sin "
+                              f"contraseña")
                 continue
             if email.lower() in ya:
                 avisos.append(f"{email}: ya existe en MailSQL (id "
                               f"{ya[email.lower()]['Id']}) — no se duplica")
                 continue
-            if not v.get("UserID") or int(v["UserID"]) not in usuarios:
-                avisos.append(f"{email}: el UserID {v.get('UserID')} no está en "
-                              f"HUB_Users — se importa SIN asignación")
+            # TODOS los que tenían la casilla, no solo el de la última fila. Un
+            # UserID que no exista en HUB_Users se avisa y se omite: es preferible
+            # importar la cuenta para los demás que no importar nada.
+            owners, perdidos = [], []
+            for f in filas:
+                uid = f.get("UserID")
+                if not uid:
+                    continue
+                try:
+                    uid = int(uid)
+                except (TypeError, ValueError):
+                    continue
+                if uid in usuarios:
+                    if uid not in owners:
+                        owners.append(uid)
+                elif uid not in perdidos:
+                    perdidos.append(uid)
+            if perdidos:
+                avisos.append(f"{email}: los UserID {perdidos} no están en "
+                              f"HUB_Users — quedan SIN asignación")
+            if not owners:
+                avisos.append(f"{email}: nadie quedó asignado")
             inserts.append({
                 "alias": (v.get("DisplayName") or "").strip() or email,
                 "email": email,
@@ -167,9 +290,9 @@ def plan(args, viejas, cifrar):
                 # contra el esquema real.
                 "carpeta_raiz": "INBOX",
                 "_contrasena": v["_contrasena"],
-                "_user_id": v.get("UserID"),
-                "_id_usuario": (usuarios.get(int(v["UserID"])) or {}).get("Id")
-                if v.get("UserID") else None,
+                "_ids_usuario": owners,
+                "_nombres": [usuarios[u].get("Nombre") or usuarios[u].get("Email")
+                             for u in owners],
             })
     finally:
         c.close()
@@ -202,10 +325,10 @@ def ejecutar(args, inserts, cifrar):
             # La asignación va en la MISMA transacción. Si la cuenta entra y la
             # asignación no, queda una cuenta que NADIE ve y que el worker
             # sincroniza al vacío: el peor estado posible, porque no se nota.
-            if not args.sin_asignar and i["_id_usuario"]:
+            for uid in ([] if args.sin_asignar else i["_ids_usuario"]):
                 cur.execute(
                     "INSERT INTO HUB_MailboxCuentasLinks (IdCuenta, IdUsuario) "
-                    "VALUES (%s,%s)", (id_cuenta, i["_id_usuario"]))
+                    "VALUES (%s,%s)", (id_cuenta, uid))
         c.commit()
     except Exception:
         c.rollback()
@@ -219,6 +342,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="no escribe nada")
+    ap.add_argument("--desde-archivo", default=os.environ.get("HUBMAIL_DUMP", ""),
+                    help="TSV previamente volcado, en vez de leer MySQL")
     ap.add_argument("--sin-asignar", action="store_true",
                     help="no crea HUB_MailboxCuentasLinks")
     ap.add_argument("--hubmail-host", default=os.environ.get("HUBMAIL_DB_HOST", ""))
@@ -233,29 +358,37 @@ def main() -> int:
     ap.add_argument("--db-name", default=os.environ.get("HUB_DB_DATABASE", "ECCSA_Admon_Pruebas"))
     args = ap.parse_args()
 
-    faltan = [n for n, v in (("HUBMAIL_DB_HOST", args.hubmail_host),
-                             ("HUBMAIL_DB_PASSWORD", args.hubmail_password),
-                             ("HUBMAIL_ENCRYPTION_KEY", args.hubmail_key),
-                             ("HUB_DB_PASSWORD", args.db_password),
-                             ("MAILBOX_ENCRYPTION_KEY",
-                              os.environ.get("MAILBOX_ENCRYPTION_KEY", "")))
-              if not v]
+    obligatorias = [("HUBMAIL_ENCRYPTION_KEY", args.hubmail_key),
+                    ("HUB_DB_PASSWORD", args.db_password),
+                    ("MAILBOX_ENCRYPTION_KEY",
+                     os.environ.get("MAILBOX_ENCRYPTION_KEY", ""))]
+    if not args.desde_archivo:
+        # Solo hacen falta para hablar con MySQL.
+        obligatorias = [("HUBMAIL_DB_HOST", args.hubmail_host),
+                        ("HUBMAIL_DB_PASSWORD", args.hubmail_password)] + obligatorias
+    faltan = [n for n, v in obligatorias if not v]
     if faltan:
         print("Faltan variables: " + ", ".join(faltan), file=sys.stderr)
         return 1
 
-    cifrar = _nuevo()
-    viejas = leer_viejas(args)
-    print(f"HUBMail: {len(viejas)} cuenta(s) leída(s) desde {args.hubmail_db}")
+    cifrar = _nuevo(os.environ["MAILBOX_ENCRYPTION_KEY"])
+    if args.desde_archivo:
+        viejas = leer_de_archivo(args.desde_archivo, args.hubmail_key)
+        print(f"HUBMail: {len(viejas)} fila(s) leída(s) de {args.desde_archivo}")
+    else:
+        viejas = leer_viejas(args)
+        print(f"HUBMail: {len(viejas)} cuenta(s) leída(s) desde {args.hubmail_db}")
 
     inserts, avisos = plan(args, viejas, cifrar)
     for a in avisos:
         print(f"  aviso: {a}")
     print(f"A importar: {len(inserts)}")
     for i in inserts:
-        print(f"  · {i['email']}  ({i['alias']})  "
-              f"IMAP {i['servidor_imap']}:{i['puerto_imap']}  "
-              f"→ {'usuario ' + str(i['_id_usuario']) if i['_id_usuario'] else 'sin asignación'}")
+        cuantos = len(i["_ids_usuario"])
+        print(f"  · {i['email']:38} {i['alias'][:22]:22} "
+              f"{i['servidor_imap']}:{i['puerto_imap']}  "
+              f"→ {cuantos} usuario(s)"
+              + (": " + ", ".join(n for n in i["_nombres"] if n)[:60] if cuantos else ""))
 
     if args.dry_run:
         print("\nMODO ENSAYO: no se escribió nada.")
