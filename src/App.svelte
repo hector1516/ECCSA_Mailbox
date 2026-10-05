@@ -13,6 +13,9 @@
 	import Firmas from './pages/Firmas.svelte';
 	import Notificaciones from './pages/Notificaciones.svelte';
 	import Cuenta from './pages/Cuenta.svelte';
+	import Mensaje from './pages/Mensaje.svelte';
+	import Redactar from './pages/Redactar.svelte';
+	import Reglas from './pages/Reglas.svelte';
 
 	let ready = $state(false);
 	let splashDone = $state(false);
@@ -105,6 +108,7 @@
 	const TABS = [
 		{ icon: '🏠', label: 'Inicio', ruta: '/' },
 		{ icon: '✍️', label: 'Firmas', ruta: '/firmas' },
+		{ icon: '📐', label: 'Reglas', ruta: '/reglas' },
 		{ icon: '🔔', label: 'Alertas', ruta: '/notificaciones' }
 	];
 
@@ -147,10 +151,23 @@
 	<div class={$auth.user ? 'shell-below-banner' : ''}>
 		{#if $path === '/login'}
 			<Login />
+		<!--
+		  EL ORDEN IMPORTA. El dispatch es una cadena {#if}/{@else if} y gana la
+		  primera que coincide, así que `/cuenta/5/mensaje/123` tiene que
+		  preguntarse ANTES que `/cuenta/5`: si el genérico fuera primero, la
+		  vista de mensaje nunca se alcanzaría.
+		-->
+		{:else if $path.startsWith('/cuenta/') && $path.endsWith('/mensaje')}
+			<!-- ["", "cuenta", 5, "mensaje", 123] → cuenta en [2], mensaje en [4] -->
+			<Mensaje mensajeId={Number($path.split('/')[4])} onSalir={cerrarSesion} />
 		{:else if $path.startsWith('/cuenta/')}
 			<Cuenta cuentaId={Number($path.split('/')[2])} onSalir={cerrarSesion} />
 		{:else if $path === '/firmas'}
 			<Firmas onSalir={cerrarSesion} />
+		{:else if $path === '/reglas'}
+			<Reglas onSalir={cerrarSesion} />
+		{:else if $path === '/redactar'}
+			<Redactar onSalir={cerrarSesion} />
 		{:else if $path === '/notificaciones'}
 			<Notificaciones onSalir={cerrarSesion} />
 		{:else if !$auth.user}

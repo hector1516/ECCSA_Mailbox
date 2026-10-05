@@ -18,7 +18,9 @@
 	// cuentas para que la home sea primero "mi correo" y después "mis
 	// herramientas", que es el orden en el que se usan.
 	const HERRAMIENTAS = [
-		{ icon: '✍️', title: 'Firmas', desc: 'Tu firma y sus imágenes', path: '/firmas' },
+		{ icon: '✍️', title: 'Redactar', desc: 'Escribir un correo', path: '/redactar' },
+		{ icon: '✒️', title: 'Firmas', desc: 'Tu firma y sus imágenes', path: '/firmas' },
+		{ icon: '📐', title: 'Reglas', desc: 'Filtros y ausencias', path: '/reglas' },
 		{ icon: '🔔', title: 'Alertas', desc: 'Notificaciones en el teléfono', path: '/notificaciones' }
 	];
 

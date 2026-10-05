@@ -96,7 +96,7 @@ def _corte_horizontal(im, caja):
 
     Devuelve (y_fin_de_la_marca, y_inicio_del_texto). Si NO encuentra un hueco
     claro, devuelve None y el llamador usa el recorte completo: es preferible
-    un icono con el texto未被 recortado que un corte a la mitad del globo.
+    un icono con el texto sin recortar que un corte a la mitad del globo.
     """
     x0, y0, x1, y1 = caja
     ancho = x1 - x0 + 1

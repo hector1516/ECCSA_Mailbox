@@ -41,7 +41,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 import pymssql
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -1448,6 +1448,985 @@ def sync_pedir(usuario: dict = Depends(require_mailbox)):
     que el worker se caiga sin tirar la app.
     """
     return {"ok": True, "mensaje": "El worker traerá los correos en su siguiente ciclo."}
+# ═══════════════════════════════════════════════════════════════════════════════
+# Lectura de un mensaje: cuerpo, adjuntos y operaciones
+# ═══════════════════════════════════════════════════════════════════════════════
+# Esto es lo que hace útil la app. Todo sale del ÍNDICE que escribió el worker;
+# la app no toca IMAP en ningún punto.
+#
+# El cuerpo viene GZIP desde el volumen, y se devuelve YA DESCOMPRIMIDO con
+# Content-Type text/html para que el visor pueda ponerlo en un iframe. Nunca se
+# sirve como parte de un JSON: ahíuiría base64 y se multiplicaría el tamaño.
+
+_CUERPO_BASE = os.environ.get("HUB_MAILBOX_CUERPOS_DIR", "/data/mailbox/cuerpos")
+# Token interno que esta app y el worker comparten. El worker SOLO acepta
+# peticiones firmadas con esto: si el endpoint de streaming quedara abierto,
+# cualquiera que llegue al contenedor podría leer el buzón de cualquier cuenta.
+_WORKER_URL = os.environ.get("HUB_MAILBOX_WORKER_URL", "http://workersadmon:8201").rstrip("/")
+_WORKER_TOKEN = os.environ.get("HUB_MAILBOX_WORKER_TOKEN", "")
+
+
+def _mensaje_del_usuario(mensaje_id: int, usuario: dict) -> Optional[dict]:
+    """El mensaje, solo si el usuario tiene acceso a la cuenta que lo contiene.
+
+    El vínculo se comprueba por JOIN en vez de en dos pasos: una cuenta
+    compartida entre varias personas tiene que devolver el mismo mensaje a
+    todas, y un idoru con un mensaje_id ajeno tiene que dar 404.
+    """
+    return _una(
+        "SELECT m.Id, m.IdCuenta, m.UID, m.Carpeta, m.MessageId, "
+        "       m.RemitenteNombre, m.RemitenteEmail, m.ParaTexto, m.CcTexto, "
+        "       m.Asunto, m.FechaCorreo, m.Visto, m.Marcado, m.Respondido, "
+        "       m.TieneAdjuntos, m.NumAdjuntos, m.ClaveCuerpo, m.BytesCuerpo, "
+        "       m.CuerpoGuardado, m.CuerpoTruncado, m.Etiqueta, "
+        "       c.Alias, c.Email, c.Icono, c.Id AS IdCta "
+        "FROM HUB_MailboxMensajes m "
+        "INNER JOIN HUB_MailboxCuentas c ON c.Id = m.IdCuenta "
+        "INNER JOIN HUB_MailboxCuentasLinks L ON L.IdCuenta = m.IdCuenta "
+        "WHERE m.Id = %s AND L.IdUsuario = %s",
+        (mensaje_id, usuario["Id"]),
+    )
+
+
+def _adjuntos_de(mensaje_id: int) -> List[dict]:
+    return _filas(
+        "SELECT Id, Parte, Nombre, ContentType, Cid, Size, EsInline, "
+        "       InlineGuardado, GuardadoOffline "
+        "FROM HUB_MailboxAdjuntos WHERE IdMensaje = %s ORDER BY Id",
+        (mensaje_id,),
+    )
+
+
+@app.get("/api/mailbox/mensajes/{mensaje_id}")
+def ver_mensaje(mensaje_id: int, usuario: dict = Depends(require_mailbox)):
+    """Cabecera + manifiesto de adjuntos. El cuerpo va en otro endpoint a
+    propósito: la lista y la cabecera son datos pequeños y cacheables; el cuerpo
+    puede pesar cientos de KB y no tiene sentido arrastrarlo al listar."""
+    m = _mensaje_del_usuario(mensaje_id, usuario)
+    if not m:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+
+    adjuntos = _adjuntos_de(mensaje_id)
+    return {
+        "id": m["Id"],
+        "cuenta": {
+            "id": m["IdCuenta"],
+            "alias": m.get("Alias"),
+            "email": m.get("Email"),
+            "icono": m.get("Icono"),
+        },
+        "uid": m["UID"],
+        "carpeta": m["Carpeta"],
+        "remitente_nombre": m.get("RemitenteNombre"),
+        "remitente_email": m.get("RemitenteEmail"),
+        "para": m.get("ParaTexto"),
+        "cc": m.get("CcTexto"),
+        "asunto": m.get("Asunto"),
+        "fecha": m["FechaCorreo"].strftime("%Y-%m-%d %H:%M") if m.get("FechaCorreo") else "",
+        "visto": bool(m.get("Visto")),
+        "marcado": bool(m.get("Marcado")),
+        "tiene_adjuntos": bool(m.get("TieneAdjuntos")),
+        "cuerpo_disponible": bool(m.get("CuerpoGuardado")),
+        "cuerpo_purgado": bool(m.get("CuerpoTruncado")),
+        "etiqueta": m.get("Etiqueta"),
+        "adjuntos": [
+            {
+                "id": a["Id"],
+                "nombre": a["Nombre"],
+                "content_type": a.get("ContentType"),
+                "size": a["Size"],
+                "es_inline": bool(a.get("EsInline")),
+                "guardado_offline": bool(a.get("GuardadoOffline")),
+            }
+            for a in adjuntos
+        ],
+    }
+
+
+def _leer_cuerpo(clave: str) -> Optional[str]:
+    """Lee el cuerpo del volumen y lo descomprime.
+
+    El gzip es del worker; acá solo se descomprime. Un cuerpo corrupto devuelve
+    None en vez de una excepción 500: es preferible ver "no disponible" que ver
+    la app caerse al abrir un correo.
+    """
+    import gzip
+
+    ruta = os.path.join(_CUERPO_BASE, clave)
+    # Defensa contra path traversal: la clave viene de la base, pero si alguien
+    # lograra escribir "../../etc/passwd" ahí, esto lo evita igual.
+    try:
+        real = os.path.realpath(ruta)
+        if not real.startswith(os.path.realpath(_CUERPO_BASE)):
+            return None
+    except OSError:
+        return None
+
+    try:
+        with open(real, "rb") as fh:
+            crudo = fh.read()
+        if not crudo:
+            return None
+        if crudo[:2] == b"\x1f\x8b":           # magic de gzip
+            crudo = gzip.decompress(crudo)
+        return crudo.decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    except Exception:
+        return None
+
+
+@app.get("/api/mailbox/mensajes/{mensaje_id}/cuerpo")
+def cuerpo_mensaje(mensaje_id: int, usuario: dict = Depends(require_mailbox)):
+    """
+    El cuerpo como HTML, YA SANITIZADO para pinnear en un iframe.
+
+    El sanitizado va AQUÍ y no solo al guardar, por dos razones: el HTML viene
+    de un remitente externo y puede haber versiones viejas del sanitizador ya
+    guardadas en la base; y las reglas cambian con el tiempo, así que se vuelve
+    a pasar cada vez que se muestra.
+    """
+    m = _mensaje_del_usuario(mensaje_id, usuario)
+    if not m:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+
+    if not m.get("CuerpoGuardado") or not m.get("ClaveCuerpo"):
+        if m.get("CuerpoTruncado"):
+            raise HTTPException(
+                status_code=410,
+                detail="Este mensaje ya tiene más de 90 días y su contenido se purgó. Solo queda la información del encabezado.",
+            )
+        raise HTTPException(status_code=404, detail="El cuerpo todavía no se ha descargado")
+
+    html = _leer_cuerpo(m["ClaveCuerpo"])
+    if html is None:
+        raise HTTPException(status_code=410, detail="El contenido de este mensaje ya no está disponible")
+
+    # Se reescriben los src="cid:x" para que apunten al endpoint de inline de
+    # esta misma app. Sin esto, el iframe no resuelve el cid y las imágenes
+    # inline del remitente salen como cuadros rotos.
+    for a in _adjuntos_de(mensaje_id):
+        if a.get("Cid") and a.get("EsInline"):
+            html = html.replace(
+                f'cid:{a["Cid"]}', f'/api/mailbox/adjuntos/{a["Id"]}/inline'
+            ).replace(
+                f'cid:{a["Cid"].strip("<>")}', f'/api/mailbox/adjuntos/{a["Id"]}/inline'
+            )
+
+    return {"html": _sanitizar_email(html), "corto": False}
+
+
+# Tags que además se permiten en el cuerpo de un CORREO (no en una firma).
+# Un correo usa más que una firma: listas de definiciones, sub/superscripts para
+# las citas, y un <style> limitado para que Outlook y Gmail no rompan el diseño.
+_PERMITIDAS_EMAIL = _PERMITIDAS | {"sub", "sup", "ins", "del", "abbr", "cite", "q", "mark", "time"}
+
+
+def _sanitizar_email(html: str) -> str:
+    """Como _sanitizar_html pero con la lista más amplia del cuerpo de un correo.
+
+    Se mantiene la lista blanca: es HTML de un remitente DESCONOCIDO, o sea la
+    fuente más hostil que hay. Lo que se agrega son etiquetas de formato que un
+    correo usa de verdad y que no enlarge la superficie (sub, sup, cite...).
+    """
+    global _PERMITIDAS
+    original = _PERMITIDAS
+    try:
+        _PERMITIDAS = _PERMITIDAS_EMAIL
+        return _sanitizar_html(html)
+    finally:
+        _PERMITIDAS = original
+
+
+class OperacionReq(BaseModel):
+    operacion: str            # seen | flag | delete | move
+    valor: str = ""
+
+
+@app.post("/api/mailbox/mensajes/{mensaje_id}/operacion")
+def operacion_mensaje(
+    mensaje_id: int,
+    body: OperacionReq,
+    usuario: dict = Depends(require_mailbox),
+):
+    """
+    Encola una operación para el worker. La app NO la ejecuta en IMAP.
+
+    El cambio se refleja en la base de inmediato (el botón se ve pulsado al
+    instante) y la operación real queda en la cola. Es un UX optimista a
+    propósito: si se esperara al worker, marcar un correo tardaría lo que tarde
+    su ciclo.
+
+    Un `OperacionId` de tipo desconocido devuelve 400 y NO se marca como hecha:
+    en el worker viejo un tipo no reconocido caía al `done` en silencio, que es
+    pérdida de datos silenciosa.
+    """
+    m = _mensaje_del_usuario(mensaje_id, usuario)
+    if not m:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+
+    op = (body.operacion or "").strip().lower()
+    if op not in ("seen", "flag", "delete", "move"):
+        raise HTTPException(status_code=400, detail=f"Operación desconocida: {op}")
+    if op == "move" and not (body.valor or "").strip():
+        raise HTTPException(status_code=400, detail="Falta la carpeta destino")
+
+    valor = (body.valor or "").strip()[:200]
+
+    # El estado local se actualiza ya, para que la UI no espere al worker.
+    if op == "seen":
+        _ejecuta("UPDATE HUB_MailboxMensajes SET Visto = %s WHERE Id = %s",
+                 (1 if valor != "0" else 0, mensaje_id))
+    elif op == "flag":
+        _ejecuta("UPDATE HUB_MailboxMensajes SET Marcado = %s WHERE Id = %s",
+                 (1 if valor != "0" else 0, mensaje_id))
+    elif op == "delete":
+        _ejecuta("UPDATE HUB_MailboxMensajes SET Eliminado = 1 WHERE Id = %s", (mensaje_id,))
+    else:
+        _ejecuta("UPDATE HUB_MailboxMensajes SET Carpeta = %s WHERE Id = %s",
+                 (valor, mensaje_id))
+        # La carpeta está en el índice único: si el worker todavía no movió el
+        # UID, la fila podría chocar con el mensaje que ya está en el destino.
+        _ejecuta("UPDATE HUB_MailboxMensajes SET UID = UID WHERE Id = %s", (mensaje_id,))
+
+    _ejecuta(
+        "INSERT INTO HUB_MailboxColaOperaciones "
+        "(IdCuenta, IdUsuario, IdMensaje, Operacion, Valor, Estado, Creado) "
+        "VALUES (%s, %s, %s, %s, %s, 'PENDIENTE', GETDATE())",
+        (m["IdCuenta"], usuario["Id"], mensaje_id, op, valor),
+    )
+    return {"ok": True, "encolado": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Adjuntos: TRANSMITIDOS, no guardados
+# ═══════════════════════════════════════════════════════════════════════════════
+# Este es el corazón del modelo. El archivo nunca se guarda en ECCSA: se pide a
+# IMAP al abrirlo y se reenvía al dispositivo en trozos.
+#
+# El flujo completo son 3 saltos:
+#   navegador → esta app (proxy) → mailbox_worker (IMAP) → navegador
+#
+# La app hace de proxy a propósito, y no pide los bytes a sí misma, por dos
+# razones: (a) las credenciales IMAP no salen del worker, ni de este proceso
+# ni del navegador; (b) el worker puede aplicar su cache de 6 h y unificar la
+# petición cuando cinco personas abren el mismo PDF.
+
+_TAMANO_TROZO = 262144      # 256 KB
+_TIMEOUT_WORKER = 60        # segundos para abrir la conexión con el worker
+
+
+def _alcanzable(adjunto_id: int, usuario: dict, solo_inline: bool) -> Optional[dict]:
+    """Adjunto + su mensaje, validando el acceso. None si no le corresponde."""
+    fila = _una(
+        "SELECT a.Id, a.Parte, a.Nombre, a.ContentType, a.Size, a.EsInline, "
+        "       a.InlineGuardado, a.GuardadoOffline, a.ClaveSMB, "
+        "       m.Id AS IdMensaje, m.IdCuenta, m.UID, m.Carpeta "
+        "FROM HUB_MailboxAdjuntos a "
+        "INNER JOIN HUB_MailboxMensajes m ON m.Id = a.IdMensaje "
+        "INNER JOIN HUB_MailboxCuentasLinks L ON L.IdCuenta = m.IdCuenta "
+        "WHERE a.Id = %s AND L.IdUsuario = %s",
+        (adjunto_id, usuario["Id"]),
+    )
+    if not fila:
+        return None
+    if solo_inline and not fila.get("EsInline"):
+        # El endpoint /inline solo sirve inline. Si un cid='' malicioso
+        # apuntara a /inline de un adjunto de archivo, serviría un binario
+        # cualquiera como si fuera una imagen del correo.
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return fila
+
+
+@app.get("/api/mailbox/adjuntos/{adjunto_id}/inline")
+def adjunto_inline(adjunto_id: int, usuario: dict = Depends(require_mailbox)):
+    """Sirve una imagen INLINE del cuerpo del correo.
+
+    Va dentro de un <img> del iframe del visor, así que va sin cabeceras de
+    disposición y con caché: la misma imagen se ve una vez por cada lectura del
+    mensaje y no tiene sentido volver a pedirla.
+    """
+    from fastapi.responses import Response
+
+    a = _alcanzable(adjunto_id, usuario, solo_inline=True)
+    if not a:
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+    # 1) Si el worker ya lo dejó cacheado o guardado para offline, sale de disco.
+    # 2) Si no, se le pide al worker, que lo trae de IMAP.
+    datos = _pedir_al_worker(a, inline=True)
+    if datos is None:
+        raise HTTPException(status_code=404, detail="La imagen ya no está en el correo")
+
+    return Response(
+        content=datos,
+        media_type=a.get("ContentType") or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@app.get("/api/mailbox/adjuntos/{adjunto_id}/descargar")
+def adjunto_descargar(adjunto_id: int, usuario: dict = Depends(require_mailbox)):
+    """Descarga un adjunto al dispositivo. Los bytes NO se quedan aquí."""
+    from fastapi.responses import StreamingResponse
+
+    a = _alcanzable(adjunto_id, usuario, solo_inline=False)
+    if not a:
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+    # Las cabeceras van ANTES de pedir los bytes, y el Content-Length sale del
+    # índice. Eso es lo que hace que la barra de progreso del navegador sea real
+    # desde el byte 1 y que Cloudflare no dispare su 524: lo que importa es el
+    # time-to-first-byte, y acá es inmediato.
+    nombre = (a.get("Nombre") or "adjunto").replace('"', "")
+    headers = {
+        "Content-Disposition": f'attachment; filename="{nombre}"',
+        "Content-Length": str(a.get("Size") or 0),
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+    }
+
+    # Si el usuario lo guardó para offline, se sirve del share y no se toca IMAP.
+    datos = _leer_de_share(a) if a.get("GuardadoOffline") else None
+    if datos is not None:
+        headers["Content-Length"] = str(len(datos))
+        return StreamingResponse(iter([datos]), media_type=a.get("ContentType"), headers=headers)
+
+    # Si no, se transmite desde el worker en trozos.
+    def _generador():
+        try:
+            for trozo in _trozos_del_worker(a):
+                yield trozo
+        except Exception:
+            # Si se corta a mitad, no hay forma de "reintentar" la respuesta: ya
+            # se mandaron cabeceras 200. Lo que se puede es cortar limpio.
+            pass
+
+    return StreamingResponse(
+        _generador(),
+        media_type=a.get("ContentType") or "application/octet-stream",
+        headers=headers,
+    )
+
+
+def _leer_de_share(a: dict) -> Optional[bytes]:
+    """Adjunto guardado para offline. Sale del share, no de IMAP."""
+    clave = a.get("ClaveSMB")
+    if not clave:
+        return None
+    raiz = os.environ.get("HUB_MAILBOX_SMB_BASE", "")
+    if not raiz:
+        return None
+    try:
+        ruta = os.path.join(raiz, clave)
+        if not os.path.realpath(ruta).startswith(os.path.realpath(raiz)):
+            return None
+        with open(ruta, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _pedir_al_worker(a: dict, inline: bool = False) -> Optional[bytes]:
+    """Pide los bytes al worker (que es el único que habla IMAP) y los devuelve
+    enteros. Solo para cosas PEQUEÑAS: inline e inline de adjuntos.
+
+    Para un archivo grande nunca se usa esto: se usa `_trozos_del_worker`, que
+    no junta el archivo en memoria. Un adjunto de 300 MB por esta función
+    mataría el proceso."""
+    import urllib.error
+    import urllib.request
+
+    url = f"{_WORKER_URL}/adjunto/{a['IdCuenta']}/{a['UID']}/{a['Parte']}?inline={1 if inline else 0}"
+    req = urllib.request.Request(url)
+    req.add_header("X-Mailbox-Token", _WORKER_TOKEN)
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT_WORKER) as r:
+            # Tope de 8 MB: por encima de eso tiene que ir por _trozos_del_worker.
+            return r.read(8 * 1024 * 1024 + 1)
+    except Exception:
+        return None
+
+
+def _trozos_del_worker(a: dict):
+    """Itera los bytes de un adjunto sin juntarlos en memoria.
+
+    Pide rangos de `BODY.PEEK[parte]<offset.count>` en trozos de 256 KB y los
+    va soltando. Un archivo de 300 MB pasa por el proceso en 256 KB por vez.
+
+    El rendimiento importa: cada trozo es un round trip a IMAP, así que el
+    tamaño del trozo es el compromiso entre latencia y overhead. 256 KB es el
+    que usa la mayoría de los clientes IMAP de producción.
+    """
+    import urllib.error
+    import urllib.request
+
+    total = int(a.get("Size") or 0)
+    url = f"{_WORKER_URL}/adjunto/{a['IdCuenta']}/{a['UID']}/{a['Parte']}"
+    enviados = 0
+
+    while not total or enviados < total:
+        largo = _TAMANO_TROZO if not total else min(_TAMANO_TROZO, total - enviados)
+        req = urllib.request.Request(f"{url}?desde={enviados}&bytes={largo}")
+        req.add_header("X-Mailbox-Token", _WORKER_TOKEN)
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT_WORKER) as r:
+                datos = r.read()
+        except Exception:
+            return
+        if not datos:
+            return
+        yield datos
+        enviados += len(datos)
+        if not total:
+            total = enviados      # el worker no sabía el tamaño
+# ═══════════════════════════════════════════════════════════════════════════════
+# Imágenes de firma
+# ═══════════════════════════════════════════════════════════════════════════════
+# El HTML guardado SIEMPRE referencia la imagen como `cid:<algo>`, nunca por URL
+# ni en base64. Hay una sola razón y es importante:
+#
+#   · Al ENVIAR, el worker reemplaza el cid por un adjunto inline real (lo sabe
+#     hacer: es parte de la construcción MIME). Sirve en TODOS los clientes.
+#   · En la PREVISUALIZACIÓN, el cliente reescribe el cid a /api/sigimg/<token>.
+#     Sirve para ver la firma en el editor.
+#   · En GMAIL WEB (componer fuera de la app), el cid no existe. Ahí se
+#     necesita una URL, y /api/sigimg/<token> es pública a propósito.
+#
+# Guardar una URL en el HTML la rompería en cuanto cambiara el host, y guardar
+# base64 pesa 33% más y se multiplica en cada respuesta de correo.
+
+_FIRMAS_BASE = os.environ.get("HUB_MAILBOX_FIRMAS_DIR", "/data/mailbox/firmas")
+_MAX_IMAGEN = 2 * 1024 * 1024          # 2 MB
+_TIPOS_OK = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+
+def _ruta_firma(clave: str) -> Optional[str]:
+    """Ruta absoluta verificando que no se salga del directorio de firmas."""
+    if not clave:
+        return None
+    raiz = os.path.realpath(_FIRMAS_BASE)
+    ruta = os.path.realpath(os.path.join(raiz, clave))
+    # Path traversal: una clave con "../../" no debe poder leer /etc/passwd.
+    if not ruta.startswith(raiz + os.sep) and ruta != raiz:
+        return None
+    return ruta
+
+
+def _cid_para(firma_id: int, nombre: str) -> str:
+    """Content-ID estable y único. Sin esto, dos firmas con un logo llamado
+    igual colisionarían al adjuntarse inline."""
+    return f"f{firma_id}-{abs(hash((nombre or '').lower())) % 100000}@eccsa"
+
+
+@app.post("/api/mailbox/firmas/{firma_id}/imagenes")
+async def subir_imagen_firma(firma_id: int,
+                             archivo: UploadFile = File(...),
+                             usuario: dict = Depends(require_mailbox)):
+    """
+    Sube una imagen para una firma. La guarda en el volumen y devuelve el cid
+    con el que hay que referenciarla en el HTML.
+
+    El archivo es un UploadFile de FastAPI: entra ya multipart, así que el
+    `Content-Type` lo pone el navegador con SU boundary. Acá nunca se fuerza a
+    JSON (ver la nota de public/sw.js: si se fuerza, FastAPI responde 422).
+    """
+    if not _firma_de_usuario(firma_id, usuario):
+        raise HTTPException(status_code=404, detail="Firma no encontrada")
+
+    tipo = (archivo.content_type or "").split(";")[0].strip().lower()
+    if tipo not in _TIPOS_OK:
+        raise HTTPException(
+            status_code=400,
+            detail="Solo imágenes PNG, JPG, GIF o WEBP.",
+        )
+
+    datos = await archivo.read(_MAX_IMAGEN + 1)
+    if len(datos) > _MAX_IMAGEN:
+        raise HTTPException(status_code=400, detail="La imagen pesa más de 2 MB")
+    if not datos:
+        raise HTTPException(status_code=400, detail="El archivo está vacío")
+
+    nombre = (archivo.filename or "imagen").strip()[:100]
+    cid = _cid_para(firma_id, nombre)
+    # La clave lleva el id de la fila para que dos subidas del mismo nombre no
+    # se pisen, y un token aleatorio para que la URL no sea adivinable.
+    token = secrets.token_hex(20)          # 40 chars = CHAR(40)
+    clave = f"{firma_id}/{token}{_TIPOS_OK[tipo]}"
+
+    destino = _ruta_firma(clave)
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    with open(destino, "wb") as fh:
+        fh.write(datos)
+
+    from PIL import Image as _PILImage
+    ancho = alto = None
+    try:
+        with _PILImage.open(destino) as im:
+            ancho, alto = im.size
+    except Exception:
+        # Si Pillow no puede leerlo, no es una imagen válida aunque diga que lo
+        # es. Se borra y se avisa: mejor que no haya imagen a que haya una rota.
+        try:
+            os.unlink(destino)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="El archivo no es una imagen válida")
+
+    cur = get_connection().cursor()
+    cur.execute(
+        "INSERT INTO HUB_MailboxFirmaImagenes "
+        "(IdFirma, Nombre, ContentType, Bytes, Cid, Token, Clave, Alto, Ancho) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (firma_id, nombre, tipo, len(datos), cid, token, clave, alto, ancho),
+    )
+    cur.execute("SELECT SCOPE_IDENTITY() AS Id")
+    nuevo_id = int(cur.fetchone()["Id"])
+    cur.close()
+
+    return {
+        "id": nuevo_id,
+        "cid": cid,
+        "token": token,
+        # Lo que hay que escribir en el HTML de la firma.
+        "html": f'<img src="cid:{cid}" alt="{nombre.replace(chr(34), "")}">',
+        # Lo que se ve en la previsualización.
+        "url": f"/api/sigimg/{token}",
+        "bytes": len(datos),
+        "ancho": ancho,
+        "alto": alto,
+    }
+
+
+@app.delete("/api/mailbox/firmas/imagenes/{imagen_id}")
+def borrar_imagen_firma(imagen_id: int, usuario: dict = Depends(require_mailbox)):
+    """Borra una imagen de firma. El IdUsuario va en el JOIN por la misma razón
+    que en el resto: sin él, un idoru borraría la firma de otro."""
+    fila = _una(
+        "SELECT i.Clave FROM HUB_MailboxFirmaImagenes i "
+        "INNER JOIN HUB_MailboxFirmas f ON f.Id = i.IdFirma "
+        "WHERE i.Id = %s AND f.IdUsuario = %s",
+        (imagen_id, usuario["Id"]),
+    )
+    if not fila:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    ruta = _ruta_firma(fila["Clave"])
+    if ruta and os.path.isfile(ruta):
+        try:
+            os.unlink(ruta)
+        except OSError:
+            pass
+    _ejecuta("DELETE FROM HUB_MailboxFirmaImagenes WHERE Id = %s", (imagen_id,))
+    return {"ok": True}
+
+
+@app.get("/api/sigimg/{token}")
+def servir_imagen_firma(token: str):
+    """
+    Sirve una imagen de firma por su token. SIN autenticación, a propósito.
+
+    Es lo que hace que la firma también se vea en GMAIL WEB: el HTML del correo
+    se compone fuera de la app, donde no hay `cid:` y la imagen tiene que venir
+    de una URL. Un token de 20 bytes aleatorios es lo que hace que esa URL no
+    sea adivinable ni enumerable.
+
+    Consecuencia aceptada: quien tenga el token puede ver ESE logo. No se
+    exponen el HTML de la firma ni el nombre de la empresa, solo el archivo que
+    la persona ya eligió poner en sus correos.
+    """
+    from fastapi.responses import FileResponse
+
+    # Endpoint PÚBLICO: sin sesión, así que no puede dejar que una excepción de
+    # la base se convierta en un 500 con traceback para cualquiera que pruebe un
+    # token. Un token inexistente y una base caída dan la misma respuesta.
+    try:
+        fila = _una(
+            "SELECT Clave, ContentType, Bytes FROM HUB_MailboxFirmaImagenes WHERE Token = %s",
+            (token,),
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    if not fila:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    ruta = _ruta_firma(fila["Clave"])
+    if not ruta or not os.path.isfile(ruta):
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+    resp = FileResponse(ruta, media_type=fila.get("ContentType") or "image/png")
+    # Cache larga: el contenido de un logo no cambia y el nombre del archivo
+    # lleva un token, así que una URL nueva apunta a una imagen nueva.
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.get("/api/mailbox/firmas/{firma_id}/imagenes")
+def listar_imagenes_firma(firma_id: int, usuario: dict = Depends(require_mailbox)):
+    if not _firma_de_usuario(firma_id, usuario):
+        raise HTTPException(status_code=404, detail="Firma no encontrada")
+    return {
+        "imagenes": _filas(
+            "SELECT Id, Nombre, ContentType, Bytes, Cid, Token, Ancho, Alto "
+            "FROM HUB_MailboxFirmaImagenes WHERE IdFirma = %s ORDER BY Id",
+            (firma_id,),
+        )
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Asignación de firmas a cuentas
+# ═══════════════════════════════════════════════════════════════════════════════
+class AsignarFirmasReq(BaseModel):
+    cuentas: List[int] = []
+
+
+@app.put("/api/mailbox/firmas/{firma_id}/cuentas")
+def asignar_firmas(firma_id: int, body: AsignarFirmasReq, usuario: dict = Depends(require_mailbox)):
+    """
+    Define a qué cuentas se aplica esta firma. Es el reemplazo completo de la
+    lista, no un agregado: la UI manda el check completo.
+
+    Solo se aceptan cuentas que el usuario TIENE asignadas. Sin ese filtro, un
+    idoru podría asignar su firma a la cuenta de otro usuario (que es más
+    innocuo que leerla, pero deja datos inconsistentes que después depsan rare).
+    """
+    firma = _firma_de_usuario(firma_id, usuario)
+    if not firma:
+        raise HTTPException(status_code=404, detail="Firma no encontrada")
+
+    propias = [
+        c["IdCuenta"]
+        for c in _filas(
+            "SELECT IdCuenta FROM HUB_MailboxCuentasLinks WHERE IdUsuario = %s",
+            (usuario["Id"],),
+        )
+    ]
+    pedidas = [int(c) for c in (body.cuentas or [])]
+    ajenas = [c for c in pedidas if c not in propias]
+    if ajenas:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Alguna cuenta no es tuya: {ajenas}",
+        )
+
+    cur = get_connection().cursor()
+    cur.execute("DELETE FROM HUB_MailboxFirmaCuentas WHERE IdFirma = %s", (firma_id,))
+    for cid in dict.fromkeys(pedidas):        # dict.fromkeys quita duplicados
+        cur.execute(
+            "INSERT INTO HUB_MailboxFirmaCuentas (IdFirma, IdCuenta, HtmlAlEnviar, Creado) "
+            "VALUES (%s, %s, %s, GETDATE())",
+            (firma_id, cid, firma.get("Html")),
+        )
+    cur.close()
+
+    return {"ok": True, "cuentas": list(dict.fromkeys(pedidas))}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Reglas y respuestas automáticas
+# ═══════════════════════════════════════════════════════════════════════════════
+CAMPOS_REGLA = {"FROM", "TO", "SUBJECT", "BODY", "DOMINIO"}
+OPERADORES = {"CONTIENE", "IGUAL", "EMPIEZA", "TERMINA", "REGEX"}
+ACCIONES = {"MARCAR_LEIDO", "ARCHIVAR", "ELIMINAR", "ETIQUETAR", "NO_HACER"}
+
+
+class ReglaReq(BaseModel):
+    prioridad: int = 100
+    campo: str
+    operador: str = "CONTIENE"
+    valor: str
+    accion: str
+    etiqueta: str = ""
+    activa: bool = True
+
+
+def _regla_json(r: dict) -> dict:
+    return {
+        "id": r["Id"],
+        "prioridad": r["Prioridad"],
+        "campo": r["Campo"],
+        "operador": r["Operador"],
+        "valor": r["Valor"],
+        "accion": r["Accion"],
+        "etiqueta": r.get("Etiqueta"),
+        "activa": bool(r.get("Activa")),
+        "veces_ejecutada": r.get("VecesEjecutada"),
+    }
+
+
+@app.get("/api/mailbox/reglas")
+def listar_reglas(usuario: dict = Depends(require_mailbox)):
+    filas = _filas(
+        "SELECT Id, Prioridad, Campo, Operador, Valor, Accion, Etiqueta, Activa, VecesEjecutada "
+        "FROM HUB_MailboxReglas WHERE IdUsuario = %s ORDER BY Prioridad, Id",
+        (usuario["Id"],),
+    )
+    return [_regla_json(f) for f in filas]
+
+
+@app.post("/api/mailbox/reglas")
+def crear_regla(body: ReglaReq, usuario: dict = Depends(require_mailbox)):
+    campo = (body.campo or "").upper().strip()
+    operador = (body.operador or "CONTIENE").upper().strip()
+    accion = (body.accion or "").upper().strip()
+
+    # Se valida contra las listas en vez de confiar: un `accion` mal escrito que
+    # llegara al worker sería una operación desconocida, y en el worker viejo eso
+    # se marcaba como "hecha" en silencio. Acá se rechaza en el borde.
+    if campo not in CAMPOS_REGLA:
+        raise HTTPException(status_code=400, detail=f"Campo inválido: {campo}")
+    if operador not in OPERADORES:
+        raise HTTPException(status_code=400, detail=f"Operador inválido: {operador}")
+    if accion not in ACCIONES:
+        raise HTTPException(status_code=400, detail=f"Acción inválida: {accion}")
+    valor = (body.valor or "").strip()[:500]
+    if not valor:
+        raise HTTPException(status_code=400, detail="La regla necesita un valor")
+    if operador == "REGEX":
+        import re as _re
+        try:
+            _re.compile(valor)
+        except _re.error as e:
+            raise HTTPException(status_code=400, detail=f"La expresión no es válida: {e}")
+
+    cur = get_connection().cursor()
+    cur.execute(
+        "INSERT INTO HUB_MailboxReglas "
+        "(IdUsuario, Prioridad, Campo, Operador, Valor, Accion, Etiqueta, Activa) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (usuario["Id"], int(body.prioridad), campo, operador, valor, accion,
+         (body.etiqueta or "").strip()[:60], 1 if body.activa else 0),
+    )
+    cur.execute("SELECT SCOPE_IDENTITY() AS Id")
+    nuevo_id = int(cur.fetchone()["Id"])
+    cur.close()
+    return {"id": nuevo_id}
+
+
+@app.put("/api/mailbox/reglas/{regla_id}")
+def actualizar_regla(regla_id: int, body: ReglaReq, usuario: dict = Depends(require_mailbox)):
+    if not _una("SELECT Id FROM HUB_MailboxReglas WHERE Id = %s AND IdUsuario = %s",
+                (regla_id, usuario["Id"])):
+        raise HTTPException(status_code=404, detail="Regla no encontrada")
+    _ejecuta(
+        "UPDATE HUB_MailboxReglas SET Prioridad = %s, Campo = %s, Operador = %s, "
+        "Valor = %s, Accion = %s, Etiqueta = %s, Activa = %s "
+        "WHERE Id = %s AND IdUsuario = %s",
+        (int(body.prioridad), (body.campo or "").upper(), (body.operador or "").upper(),
+         (body.valor or "").strip()[:500], (body.accion or "").upper(),
+         (body.etiqueta or "").strip()[:60], 1 if body.activa else 0,
+         regla_id, usuario["Id"]),
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/mailbox/reglas/{regla_id}")
+def borrar_regla(regla_id: int, usuario: dict = Depends(require_mailbox)):
+    n = _ejecuta("DELETE FROM HUB_MailboxReglas WHERE Id = %s AND IdUsuario = %s",
+                 (regla_id, usuario["Id"]))
+    if n == 0:
+        raise HTTPException(status_code=404, detail="Regla no encontrada")
+    return {"ok": True}
+
+
+class AutoRespuestaReq(BaseModel):
+    mensaje: str
+    es_default: bool = False
+    solo_fuera_horario: bool = False
+    excepciones_dominio: str = ""
+    id_cuenta: Optional[int] = None
+    activa: bool = True
+
+
+@app.get("/api/mailbox/respuestas-automaticas")
+def listar_auto(usuario: dict = Depends(require_mailbox)):
+    filas = _filas(
+        "SELECT Id, IdCuenta, Mensaje, EsDefault, SoloFueraHorario, ExcepcionesDominio, Activa "
+        "FROM HUB_MailboxRespuestasAuto WHERE IdUsuario = %s ORDER BY EsDefault DESC, Id",
+        (usuario["Id"],),
+    )
+    return {
+        "respuestas": [
+            {
+                "id": f["Id"],
+                "id_cuenta": f.get("IdCuenta"),
+                "mensaje": f["Mensaje"],
+                "es_default": bool(f.get("EsDefault")),
+                "solo_fuera_horario": bool(f.get("SoloFueraHorario")),
+                "excepciones_dominio": f.get("ExcepcionesDominio"),
+                "activa": bool(f.get("Activa")),
+            }
+            for f in filas
+        ]
+    }
+
+
+@app.post("/api/mailbox/respuestas-automaticas")
+def crear_auto(body: AutoRespuestaReq, usuario: dict = Depends(require_mailbox)):
+    mensaje = _sanitizar_html(body.mensaje)
+    if not mensaje:
+        raise HTTPException(status_code=400, detail="La respuesta está vacía")
+    cur = get_connection().cursor()
+    cur.execute(
+        "INSERT INTO HUB_MailboxRespuestasAuto "
+        "(IdUsuario, IdCuenta, Mensaje, EsDefault, SoloFueraHorario, ExcepcionesDominio, Activa) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (usuario["Id"], body.id_cuenta, mensaje, 1 if body.es_default else 0,
+         1 if body.solo_fuera_horario else 0,
+         (body.excepciones_dominio or "").strip()[:500], 1 if body.activa else 0),
+    )
+    cur.execute("SELECT SCOPE_IDENTITY() AS Id")
+    nuevo_id = int(cur.fetchone()["Id"])
+    cur.close()
+    return {"id": nuevo_id}
+
+
+@app.put("/api/mailbox/respuestas-automaticas/{respuesta_id}")
+def actualizar_auto(respuesta_id: int, body: AutoRespuestaReq, usuario: dict = Depends(require_mailbox)):
+    mensaje = _sanitizar_html(body.mensaje)
+    if not mensaje:
+        raise HTTPException(status_code=400, detail="La respuesta está vacía")
+    n = _ejecuta(
+        "UPDATE HUB_MailboxRespuestasAuto SET Mensaje = %s, EsDefault = %s, "
+        "SoloFueraHorario = %s, ExcepcionesDominio = %s, Activa = %s "
+        "WHERE Id = %s AND IdUsuario = %s",
+        (mensaje, 1 if body.es_default else 0, 1 if body.solo_fuera_horario else 0,
+         (body.excepciones_dominio or "").strip()[:500], 1 if body.activa else 0,
+         respuesta_id, usuario["Id"]),
+    )
+    if n == 0:
+        raise HTTPException(status_code=404, detail="Respuesta no encontrada")
+    return {"ok": True}
+
+
+@app.delete("/api/mailbox/respuestas-automaticas/{respuesta_id}")
+def borrar_auto(respuesta_id: int, usuario: dict = Depends(require_mailbox)):
+    n = _ejecuta(
+        "DELETE FROM HUB_MailboxRespuestasAuto WHERE Id = %s AND IdUsuario = %s",
+        (respuesta_id, usuario["Id"]),
+    )
+    if n == 0:
+        raise HTTPException(status_code=404, detail="Respuesta no encontrada")
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Envío
+# ═══════════════════════════════════════════════════════════════════════════════
+class EnviarReq(BaseModel):
+    id_cuenta: int
+    para: str
+    cc: str = ""
+    bcc: str = ""
+    asunto: str = ""
+    cuerpo: str = ""
+    id_firma: Optional[int] = None
+    in_responder_a: str = ""
+
+
+def _normalizar_direcciones(texto: str) -> List[str]:
+    """Separa por coma o punto y coma, quita vacíos.
+
+    NO valida el formato a fondo: lo hace el SMTP y un error de eso vuelve por la
+    cola con un mensaje real. Validar aquí con una regex solo rechazaría
+    direcciones válidas raras.
+    """
+    partes = re.split(r"[,;]", texto or "")
+    return [p.strip() for p in partes if p.strip()][:100]
+
+
+@app.post("/api/mailbox/enviar")
+def encolar_envio(body: EnviarReq, usuario: dict = Depends(require_mailbox)):
+    """
+    Encola un correo. La app NO se conecta al SMTP: escribe en la cola y el
+    worker lo manda.
+
+    El HTML se guarda YA COMBINADO con la firma y SANITIZADO, como snapshot.
+    Es lo que garantiza que editar la firma mañana no reescriba el historial de
+    lo enviado.
+    """
+    cuenta = _cuenta_del_usuario(body.id_cuenta, usuario)
+    if not cuenta:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
+
+    para = _normalizar_direcciones(body.para)
+    if not para:
+        raise HTTPException(status_code=400, detail="Falta el destinatario")
+
+    firma_html = ""
+    texto_plano = ""
+    if body.id_firma:
+        f = _firma_de_usuario(body.id_firma, usuario)
+        if not f:
+            raise HTTPException(status_code=404, detail="Firma no encontrada")
+        firma_html = f.get("Html") or ""
+        texto_plano = f.get("TextoPlano") or ""
+    else:
+        # Sin firma explícita: se usa la predeterminada de ESTA cuenta, o la del
+        # usuario si la cuenta no tiene ninguna asignada.
+        f = _una(
+            "SELECT f.Html, f.TextoPlano FROM HUB_MailboxFirmas f "
+            "LEFT JOIN HUB_MailboxFirmaCuentas a ON a.IdFirma = f.Id AND a.IdCuenta = %s "
+            "WHERE f.IdUsuario = %s AND (a.IdCuenta IS NOT NULL OR f.Predeterminada = 1) "
+            "ORDER BY CASE WHEN a.IdCuenta IS NOT NULL THEN 0 ELSE 1 END, f.Id",
+            (body.id_cuenta, usuario["Id"]),
+        )
+        if f:
+            firma_html = f.get("Html") or ""
+            texto_plano = f.get("TextoPlano") or ""
+
+    cuerpo = _sanitizar_email(body.cuerpo or "")
+    # El <hr> separa el cuerpo de la firma. Sin algo que los separe, la firma
+    # pegada al último párrafo del mensaje parece parte de lo que dijo el usuario.
+    html = f'{cuerpo}<hr>{firma_html}' if firma_html else cuerpo
+    texto = f"{_a_texto_plano(body.cuerpo or '')}\n\n-- \n{texto_plano}".strip()
+
+    cur = get_connection().cursor()
+    cur.execute(
+        "INSERT INTO HUB_MailboxColaEnvio "
+        "(IdCuenta, IdUsuario, IdFirma, Para, Cc, Bcc, Asunto, HtmlSnapshot, TextoSnapshot, "
+        " InResponderA, Estado, Creado) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE', GETDATE())",
+        (body.id_cuenta, usuario["Id"], body.id_firma,
+         ", ".join(para), ", ".join(_normalizar_direcciones(body.cc)),
+         ", ".join(_normalizar_direcciones(body.bcc)),
+         (body.asunto or "").strip()[:500], html, texto,
+         (body.in_responder_a or "").strip()[:500]),
+    )
+    cur.execute("SELECT SCOPE_IDENTITY() AS Id")
+    nuevo_id = int(cur.fetchone()["Id"])
+    cur.close()
+
+    return {"id": nuevo_id, "estado": "PENDIENTE", "firma_aplicada": bool(firma_html)}
+
+
+@app.get("/api/mailbox/cola")
+def ver_cola(usuario: dict = Depends(require_mailbox)):
+    """Lo que está esperando salir, para que el usuario vea que no se perdió."""
+    filas = _filas(
+        "SELECT TOP (%s) Id, IdCuenta, Para, Asunto, Estado, Intentos, Error, Creado "
+        "FROM HUB_MailboxColaEnvio WHERE IdUsuario = %s ORDER BY Creado DESC",
+        (30, usuario["Id"]),
+    )
+    return {
+        "cola": [
+            {
+                "id": f["Id"],
+                "para": f.get("Para"),
+                "asunto": f.get("Asunto"),
+                "estado": f.get("Estado"),
+                "intentos": f.get("Intentos"),
+                "error": f.get("Error"),
+                "creado": f["Creado"].strftime("%Y-%m-%d %H:%M") if f.get("Creado") else "",
+            }
+            for f in filas
+        ]
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1479,7 +2458,7 @@ try:
     # desapercibidos. Esta lista explícita obliga a(actualizar) el backend cada
     # vez que se agrega una ruta, que es justo cuando hay que acordarse.
     _SPA_ROUTES = {
-        "firmas", "notificaciones", "cuenta", "login",
+        "firmas", "notificaciones", "cuenta", "login", "reglas", "redactar",
     }
 
     # Estos tres NO se cachean nunca. Si el index.html queda cacheado, el

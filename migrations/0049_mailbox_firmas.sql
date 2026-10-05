@@ -104,10 +104,17 @@ BEGIN
         -- en un índice único sin acercarse al tope de 900.
         Token           CHAR(40)        NULL,
 
-        -- Dónde quedó guardada en el share. Relativa a la raíz configurada,
-        -- nunca absoluta: una ruta absoluta en la base se rompe si el share se
-        -- mueve de servidor.
-        RutaSMB         NVARCHAR(400)   NULL,
+        -- Dónde quedó guardada: RELATIVA a /data/mailbox/firmas, nunca
+        -- absoluta (una ruta absoluta se rompe si el volumen se mueve).
+        --
+        -- OJO, el nombre de la columna dice SMB pero NO va al FileServer: se
+        -- cambió a propósito. Una firma tiene ~5 imágenes de 30-80 KB, o sea
+        -- ~1.6 MB para toda la empresa; eso no justifica un share de red, ni
+        -- meter pysmb en la app, ni un salto por cada firma que se muestra.
+        -- Y como los adjuntos ya no se guardan, el FileServer se quedó sin
+        -- trabajo en Mailbox. El nombre se conserva para no rehacer la
+        -- migración; la semántica real es "clave de almacenamiento".
+        Clave           NVARCHAR(400)   NULL,
 
         Alto            INT             NULL,
         Ancho           INT             NULL,
