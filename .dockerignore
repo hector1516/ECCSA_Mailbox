@@ -1,7 +1,10 @@
 .git
 .github
+# `dist` NO se ignora a propósito: el frontend se compila en CI y el
+# Dockerfile hace `COPY dist/ ./dist/`. Si se ignorara, el build falla
+# con "dist: not found" — y esa línea estaba aquí, contradiciendo el
+# propio Dockerfile.
 node_modules
-dist
 build
 .svelte-kit
 __pycache__

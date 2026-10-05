@@ -26,6 +26,17 @@ COPY dist/ ./dist/
 COPY ECCSA_SHELL_VERSION ./ECCSA_SHELL_VERSION
 COPY package.json ./package.json
 
+# El runner de migraciones va DENTRO de la imagen, y las migraciones con él.
+#
+# Sin esto, aplicar el esquema en un servidor nuevo es un paso que hay que
+# resolver por fuera: el contenedor tiene pymssql y la imagen no lo tenía, así que
+# `docker exec mailbox python apply_migrations.py` daba ModuleNotFoundError. Y
+# las tablas HUB_Mailbox* no existen hasta que alguien las cree, así que la app
+# arranca, el login funciona, y la primera consulta a HUB_MailboxCuentas contesta
+# "invalid object name" sin más pista.
+COPY apply_migrations.py ./
+COPY migrations/ ./migrations/
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s \

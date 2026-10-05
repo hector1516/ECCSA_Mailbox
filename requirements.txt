@@ -37,11 +37,14 @@ webauthn==3.0.0
 # ── Notificaciones push ───────────────────────────────────────────────────────
 pywebpush==2.0.0
 py-vapid==1.9.1
-# cryptography: the EC P-256 key pair for VAPID is generated here, and Fernet
-#              encrypts the mailbox passwords (in the worker). It also arrives as
-#              a dependency of pywebpush, but it's listed explicitly because it's
-#              imported directly.
-cryptography==43.0.3
+# cryptography NO se fija. `webauthn==3.0.0` (las passkeys, el mismo par que usa
+# Admon) exige `cryptography>=49`, así que fijarla en 43 hace que `pip install`
+# falle con ResolutionImpossible y **la imagen no se puede construir**. Pasa por
+# alto porque nadie la había construido.
+#
+# Es además la misma política de Admon (requirements.txt, 2026-09-27): las
+# transitivas entran solas donde toque y no se fijan. En producción corre la 50.
+cryptography>=49
 
 # ── Datos ─────────────────────────────────────────────────────────────────────
 # pymssql/FreeTDS speaks SQL Server. NOTE: no placeholders `?` in this ecosystem

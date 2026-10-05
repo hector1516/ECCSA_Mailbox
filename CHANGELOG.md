@@ -7,6 +7,40 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-06 — Dos cosas que hacían imposible construir la imagen
+
+Ninguna se veía sin intentar el build, y por eso nadie lo había hecho.
+
+- **`.dockerignore` ignoraba `dist`, y el Dockerfile hace `COPY dist/`.** El
+  build moría con "dist: not found". Las dos líneas se contradecían en el mismo
+  repo y el `.dockerignore` tenía la culpa: `dist` es exactamente lo que CI
+  compila y la imagen necesita.
+- **`cryptography==43.0.3` hacía irresoluble el `pip install`.** `webauthn==3.0.0`
+  —las passkeys, el mismo par que usa Admon— exige `cryptography>=49`, así que
+  `pip install` terminaba en `ResolutionImpossible` y **la imagen no se podía
+  construir**. Ahora es `cryptography>=49`, que es la misma política de Admon
+  (requirements.txt, 2026-09-27): las transitivas entran solas y no se fijan. En
+  producción corre la 50.
+
+### 2026-10-06 — El runner de migraciones también va en la imagen
+
+`COPY apply_migrations.py` y `COPY migrations/`. El contenedor tiene `pymssql` y
+la imagen no lo tenía, así que `docker exec mailbox python apply_migrations.py`
+daba `ModuleNotFoundError`: en un servidor nuevo, aplicar el esquema era un paso
+que había que resolver por fuera. Y las tablas `HUB_Mailbox*` no existen hasta
+que alguien las crea, así que la app arrancaba, el login funcionaba, y la primera
+consulta a `HUB_MailboxCuentas` contestaba "invalid object name" sin más pista.
+
+### Desplegado
+
+- Imagen `mailbox-local:latest` construida en WebbApps.
+- `/opt/apps/mailbox/app.conf` + `/etc/mailbox.env` (modo 600), volumen
+  `mailbox_data`, red `mailbox_net`, puerto **8104**.
+- Migraciones `0048`–`0051` aplicadas en `ECCSA_Admon`.
+- **13 cuentas reales importadas desde HUBMail**, con sus 31 asignaciones y las
+  credenciales recifradas con la llave nueva.
+
+
 ### 2026-10-05 — Importador de cuentas desde HUBMail
 
 `tools/importar_cuentas_hubmail.py` trae las cuentas del HUBMail viejo (MySQL)
