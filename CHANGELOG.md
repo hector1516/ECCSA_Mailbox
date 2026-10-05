@@ -7,6 +7,32 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-06 — La clave VAPID estaba en PEM y ningún push podía salir
+
+El push de prueba respondía **502 "no se pudo enviar a ningún dispositivo"**, y
+sin más pistas: el handler tenía un `except Exception` que solo contaba el fallo
+y no lo escribía en ninguna parte. Con 1 suscripción y 1 fallo no había forma de
+saber qué pasaba.
+
+La causa: la clave privada se guardaba en **PEM** (241 caracteres) y `pywebpush`
+espera los **32 bytes crudos en base64url** (43 caracteres). Toda suscripción
+fallaba siempre.
+
+Dos arreglos:
+
+- La privada se genera y se guarda en base64url, el mismo formato que
+  `applicationServerKey` del lado público.
+- **Las claves PEM que ya estaban guardadas se convierten solas** al primer uso.
+  No hay que regenerar el par ni reinstalar la PWA: las suscripciones que el
+  navegador ya tiene siguen valiendo porque el **público no cambia** — es el
+  mismo par de claves.
+- El `except Exception` ahora escribe el error. Un push que falla sin decir por
+  qué es un push que cuesta una hora.
+
+Verificado contra la suscripción real de iPhone en `web.push.apple.com`:
+`{"enviados":1,"fallidos":0}`.
+
+
 ### 2026-10-06 — Se quita la barra inferior, para igualar a Admon y Field
 
 Mailbox tenía una barra de pestañas propia abajo. Admon y Field **no tienen

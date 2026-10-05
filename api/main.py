@@ -960,6 +960,33 @@ def previsualizar_firma(body: PrevisualizarReq, usuario: dict = Depends(require_
 _VAPID_CACHE: Dict[str, str] = {}
 
 
+def _pem_a_vapid(pem: str) -> str:
+    """
+    PEM -> base64url de los 32 bytes crudos.
+
+    Un solo lado de la conversión: la clave tiene que quedar en el MISMO formato
+    que usa `applicationServerKey` del lado público, que es base64url sin
+    padding. Si se hiciera al revés, el navegador rechazaría la suscripción.
+    """
+    from cryptography.hazmat.primitives import serialization
+
+    clave = serialization.load_pem_private_key(pem.encode(), password=None)
+    crudo = clave.private_numbers().private_value.to_bytes(32, "big")
+    return base64.urlsafe_b64encode(crudo).rstrip(b"=").decode()
+
+
+def _guardar_vapid(priv: str, pub: str) -> None:
+    """Persiste el par. Separate para que la conversión se pueda auditar."""
+    cur = get_connection().cursor()
+    for clave, valor in (("vapid_private_key", priv), ("vapid_public_key", pub)):
+        cur.execute("UPDATE HUB_Config SET Valor = %s, Actualizado = GETDATE() "
+                    "WHERE Clave = %s", (valor, clave))
+        if cur.rowcount == 0:
+            cur.execute("INSERT INTO HUB_Config (Clave, Valor, Actualizado) "
+                        "VALUES (%s, %s, GETDATE())", (clave, valor))
+    cur.close()
+
+
 def _vapid() -> dict:
     """Devuelve {privada, publica}. Genera el par la primera vez y lo persiste.
 
@@ -979,6 +1006,13 @@ def _vapid() -> dict:
 
     priv = _config("vapid_private_key")
     pub = _config("vapid_public_key")
+    # Una clave PEM que haya quedado de una versión anterior se convierte sola:
+    # nadie tiene que volver a generar el par ni volver a instalar la PWA, y las
+    # suscripciones que el navegador ya tiene siguen valiendo porque el PÚBLICO
+    # no cambia (es el mismo par de claves).
+    if priv and priv.lstrip().startswith("-----BEGIN"):
+        priv = _pem_a_vapid(priv)
+        _guardar_vapid(priv, pub)
     if priv and pub:
         _VAPID_CACHE.update({"priv": priv, "pub": pub})
         return {"priv": priv, "pub": pub}
@@ -987,11 +1021,16 @@ def _vapid() -> dict:
     from cryptography.hazmat.primitives.asymmetric import ec
 
     key = ec.generate_private_key(ec.SECP256R1())
-    priv = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode()
+    # La privada va como base64url de los 32 bytes CRUDOS, no en PEM.
+    #
+    # Es el formato que espera `pywebpush`/`py-vapid`, y el mismo que el
+    # navegador recibe en `applicationServerKey` del lado público. Con la
+    # privada en PEM el envío falla SIEMPRE con una excepción que `pywebpush` no
+    # explica bien, y el mensaje de la app es "no se pudo enviar a ningún
+    # dispositivo" sin decir por qué. Pasó: la primera versión guardaba PEM
+    # (241 caracteres en vez de 43) y el push de prueba salió 502.
+    priv = base64.urlsafe_b64encode(
+        key.private_numbers().private_value.to_bytes(32, "big")).decode()
     # El público va como base64url de los 65 bytes del punto sin comprimir
     # (0x04 + X + Y). Es lo que espera applicationServerKey en el navegador.
     pub = base64.urlsafe_b64encode(
@@ -1194,7 +1233,12 @@ def push_prueba(usuario: dict = Depends(require_mailbox)):
                 # no reintentar eternamente contra una suscripción muerta.
                 _ejecuta("UPDATE HUB_MailboxSuscripciones SET Activo = 0 WHERE Id = %s", (s["Id"],))
             fallidos += 1
-        except Exception:
+        except Exception as exc:
+            # Antes esto era un `except Exception` mudo y el push salía con un
+            # "no se pudo enviar a ningún dispositivo" sin ninguna pista. Con
+            # VAPID roto (una PEM donde debía haber base64url) ESE fue el
+            # síntoma, y costó una hora de buscar el motivo.
+            print(f"[push] {type(exc).__name__}: {exc}", flush=True)
             fallidos += 1
 
     if enviados == 0:
