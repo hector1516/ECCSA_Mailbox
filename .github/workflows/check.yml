@@ -1,0 +1,191 @@
+name: Check
+
+# Tres gates, todos baratos, y los tres se ejecutan también en pull_request:
+#
+#   1. El CSS del shell NO fue editado a mano (se compara el SHA).
+#   2. El popup de novedades dice la misma versión que el banner.
+#   3. El código compila: `npm run build`, `py_compile` y el test del
+#      sanitizador.
+#
+# El gate 3 no es trivial porque los errores que llegan a producción en este
+# ecosistema son casi siempre de sintaxis en un archivo que nadie compila:
+# un `python -m py_compile panel/*.py` que no cubre el worker nuevo es como se
+# subió un `cron_sync_X.py` roto.
+
+on:
+  push:
+    branches: [main, developer]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: check-mailbox
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Gate 1: el CSS del shell ──────────────────────────────────────────
+      # src/styles/app.css lo GENERA ECCSA-Shell/tools/build_shell.py y lo
+      # propaga sync_shell.py. Editarlo a mano desincroniza la app del diseño del
+      # resto del ecosistema y este gate lo detecta.
+      #
+      # La respuesta NO es relajar el gate: es cambiar el diseño en
+      # ECCSA-Shell/tokens.css o src/body.css y correr
+      #   python tools/build_shell.py && python tools/sync_shell.py --target .
+      # Los comentarios del CSS y AGENTS.md §Shell lo dicen también.
+      - name: El CSS no fue editado a mano
+        run: |
+          set -euo pipefail
+          CSS=src/styles/app.css
+          ESPERADO="$(cat ECCSA_SHELL_SHA)"
+          REAL="$(sha256sum "$CSS" | cut -c1-12)"
+          if [ "$REAL" != "$ESPERADO" ]; then
+            echo "::error::El CSS del shell NO se edita en la app."
+            echo "::error::Se cambia en ECCSA-Shell (tokens.css / src/body.css) y se propaga."
+            echo "::error::  python tools/build_shell.py && python tools/sync_shell.py --target . --variant t3"
+            exit 1
+          fi
+          echo "ok · $CSS con el SHA del shell ($ESPERADO)"
+
+      # ── Gate 2: el popup de novedades ────────────────────────────────────
+      # La `version` del changelog.json es la que decide si el popup de 📋 salta
+      # al usuario. Si no coincide con la del banner, el popup salta en cada
+      # carga o nunca sale.
+      - name: El popup de novedades dice la versión del banner
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, re, sys
+
+          shell = open("src/lib/shell.js", encoding="utf-8").read()
+          banner = re.search(r"APP_VERSION = '([^']+)'", shell)
+          if not banner:
+              print("::error::no se encontró APP_VERSION en src/lib/shell.js"); sys.exit(1)
+          v_banner = banner.group(1)
+
+          datos = json.load(open("public/changelog.json", encoding="utf-8"))
+          if datos.get("version") != v_banner:
+              print(f"::error::changelog.json dice {datos.get('version')} y el banner {v_banner}")
+              print("::error::Las dos tienen que coincidir (ver AGENTS.md §Versionado)")
+              sys.exit(1)
+
+          cambios = datos.get("cambios") or []
+          if not cambios:
+              print("::error::changelog.json tiene la lista de cambios vacía"); sys.exit(1)
+
+          # 160 caracteres es lo que entra cómodo en un iPhone. Más que eso se
+          # corta a media frase en la pantalla de bloqueo.
+          largos = [c for c in cambios if len(c) > 160]
+          if largos:
+              for c in largos:
+                  print(f"::error::({len(c)} chars) {c}")
+              print("::error::Máximo 160 caracteres por línea de cambios")
+              sys.exit(1)
+
+          # package.json es la FUENTE de la versión; los otros dos son copias.
+          pkg = json.load(open("package.json", encoding="utf-8")).get("version")
+          if pkg != v_banner:
+              print(f"::error::package.json dice {pkg} y src/lib/shell.js dice {v_banner}")
+              print("::error::Corrige package.json y corre sync_shell.py")
+              sys.exit(1)
+
+          print(f"ok · {v_banner} · {len(cambios)} cambios, el más largo {max(len(c) for c in cambios)} chars")
+          PY
+
+      # ── Gate 3a: el backend ───────────────────────────────────────────────
+      - name: Instalar dependencias de Python
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq freetds-dev
+          pip install --quiet -r requirements.txt
+          python3 -c "import pymssql, webauthn, pywebpush; print('imports ok')"
+
+      - name: py_compile del backend
+        run: python3 -m py_compile api/*.py tools/*.py
+
+      # ── Gate 3b: el sanitizador de firmas ────────────────────────────────
+      # Es la frontera de seguridad del módulo de firmas, y por eso tiene su
+      # propio archivo de pruebas que corre SIN base de datos. Un sanitizador que
+      # deja pasar un <script> convierte la app en phishing para toda la empresa.
+      - name: Pruebas del sanitizador de HTML
+        run: python3 tools/test_sanitizador.py
+
+      # ── Gate 3c: los manifests de la PWA ────────────────────────────────
+      # Un manifiesto con un icono que no existe NO es un error de build: la PWA
+      # instala y el ícono sale en blanco. Por eso se verifica que cada src
+      # del manifest exista de verdad en public/.
+      - name: Los íconos del manifest existen
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, sys
+          m = json.load(open("public/manifest.webmanifest", encoding="utf-8"))
+          faltan = []
+          for i in m.get("icons", []):
+              src = i["src"].lstrip("/")
+              if not os.path.isfile(os.path.join("public", src)):
+                  faltan.append(src)
+          for s in m.get("shortcuts", []):
+              for i in s.get("icons", []):
+                  src = i["src"].lstrip("/")
+                  if not os.path.isfile(os.path.join("public", src)):
+                      faltan.append(src)
+          if faltan:
+              for f in faltan:
+                  print(f"::error::el manifest apunta a {f} y no existe")
+              print("::error::Regenerá con: python tools/generar_iconos.py")
+              sys.exit(1)
+          # maskable es obligatorio en Android; sin él el ícono se ve recortado
+          # en círculo con el logo cortado por los bordes.
+          purposes = {i.get("purpose") for i in m.get("icons", [])}
+          if "maskable" not in purposes:
+              print("::error::falta un icono con purpose=maskable")
+              sys.exit(1)
+          print(f"ok · {len(m['icons'])} iconos, todos existen, incluye maskable")
+          PY
+
+      # ── Gate 3d: el frontend ─────────────────────────────────────────────
+      - name: Instalar dependencias de Node
+        run: npm ci
+
+      - name: Construir el frontend
+        run: npm run build
+
+      # Un dist/ sin los logos es un splash roto en producción: el build pasa y
+      # la app abre en negro. Por eso se comprueba el contenido, no solo el
+      # código de salida de vite.
+      - name: El dist/ está completo
+        run: |
+          set -euo pipefail
+          for f in index.html manifest.webmanifest sw.js mailbox_logo.png \
+                   mailbox_marca.png engrane.png favicon.ico changelog.json \
+                   icons/icon-192x192.png icons/icon-512x512.png \
+                   icons/icon-512-maskable.png apple-touch-icon.png; do
+            if [ ! -f "dist/$f" ]; then
+              echo "::error::falta dist/$f"
+              echo "::error::Si es un logo: python tools/generar_iconos.py y volver a compilar"
+              exit 1
+            fi
+          done
+          if ! ls dist/assets/index-*.js >/dev/null 2>&1; then
+            echo "::error::dist/assets no tiene el bundle de JS"
+            exit 1
+          fi
+          echo "ok · dist/ completo ($(du -sh dist | cut -f1))"
+
+      - name: Resumen
+        run: |
+          {
+            echo "### Check de Mailbox"
+            echo ""
+            echo "- ✅ CSS del shell sin editar a mano"
+            echo "- ✅ Versiones alineadas (package.json = shell.js = changelog.json)"
+            echo "- ✅ py_compile + sanitizador + manifest + dist/"
+          } >> "$GITHUB_STEP_SUMMARY"

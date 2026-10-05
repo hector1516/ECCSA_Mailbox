@@ -1,0 +1,238 @@
+# =============================================================
+# Mailbox ECCSA — deploy a Linux (GitHub Actions → WebbApps)
+#
+# ARQUITECTURA DEL DEPLOY
+# -----------------------
+# No compila el servidor de destino. El build corre en `ubuntu-latest` y sube la
+# imagen a GHCR; el servidor (WebbApps 10.188.141.17, 1 vCPU y 1.9 GB de RAM)
+# solo hace `docker pull` y recreate el contenedor con el núcleo común
+# `_lib/run_app.sh`.
+#
+# Por qué: compilar una imagen de varios cientos de MB en 1.9 GB de RAM revienta.
+# Descargarla no. Este workflow sigue el patrón de WorkersAdmon
+# (deploy-linux.yml), que es el que ya funciona en producción.
+#
+# EL SERVIDOR NUNCA ARRANCA POR SU CUENTA
+# ----------------------------------------
+# APP_AUTO_START=0 deja el contenedor en `created`. Cambiar el estado de
+# producción no debería ser un efecto colateral de un push: alguien tiene que
+# escribir `docker start mailbox` (o el pipeline lo hace en un paso aparte).
+#
+# SECRETOS
+# --------
+# NO salen de GitHub. Viven en `/etc/mailbox.env` en el servidor (600 root:root)
+# y `run_app.sh` los sourcea él mismo. El CI solo necesita la clave SSH.
+# Ventajas: la contraseña de la base no está en GitHub, no viaja por el comando
+# remoto (quedaría en el historial del shell del servidor) y no hace falta la tag
+# SETENV de sudo para preservarla.
+# =============================================================
+
+name: Deploy Mailbox
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Un push nuevo cancela el anterior. Con cancel-in-progress false, uno que se
+  # quedó atascado sin runner retenía el grupo y congelaba los deploys siguientes:
+  # eso ya pasó en el ecosistema y es la razón del comentario de arriba.
+  group: deploy-mailbox
+  cancel-in-progress: true
+
+env:
+  DEPLOY_HOST: 10.188.141.17
+  DEPLOY_USER: deploy
+  IMAGE: ghcr.io/${{ github.repository_owner }}/eccsa-mailbox
+  TAG: ${{ github.sha }}
+
+jobs:
+  # ── Desbloquear ────────────────────────────────────────────────────────────
+  # Cancela deploys que llevan más de 15 min en cola.
+  #
+  # No se consulta la API de runners a propósito: exige permiso de administración
+  # de repos, que GITHUB_TOKEN no tiene (403). Con `actions: write` alcanza, que
+  # es justo lo que se necesita para cancelar.
+  desbloquear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Cancelar deploys atascados
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LIMITE=$(date -u -d '-15 minutes' +%Y-%m-%dT%H:%M:%SZ)
+          ATASCADOS=$(gh api "repos/${{ github.repository }}/actions/runs?status=queued" \
+            --jq "[.workflow_runs[] | select(.name | startswith(\"Deploy\"))
+                   | select(.created_at < \"$LIMITE\")] | .[] | .id")
+          if [ -z "$ATASCADOS" ]; then
+            echo "::notice::nada atascado"
+            exit 0
+          fi
+          echo "$ATASCADOS" | while read -r id; do
+            gh api -X POST "repos/${{ github.repository }}/actions/runs/$id/cancel" >/dev/null 2>&1 \
+              && echo "  cancelado $id" || true
+          done
+
+  # ── Build + push a GHCR ───────────────────────────────────────────────────
+  # Corre en ubuntu-latest. El servidor destino nunca compila.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Compilar el frontend
+        # dist/ está en .gitignore: NUNCA se versiona. El ServerVM no tiene Node,
+        # así que el bundle se arma acá y viaja dentro de la imagen.
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login a GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache de capas
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-mailbox-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-mailbox-
+
+      - name: Construir imagen
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
+
+      - name: Anotar digest
+        run: echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  # ── Deploy ────────────────────────────────────────────────────────────────
+  # Baja la imagen, recrea el contenedor SIN arrancarlo y publica el estado.
+  deploy:
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Preparar clave SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # Se valida la cabecera: hay usuarios que guardan el secret con un
+          # newline de más y ssh lo rechaza con un error poco claro.
+          echo "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          head -c 40 ~/.ssh/id_deploy | grep -q 'OPENSSH PRIVATE KEY' \
+            || { echo "::error::DEPLOY_SSH_KEY no parece una clave privada válida"; exit 1; }
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Comprobar que el servidor tiene el app.conf
+        run: |
+          set -euo pipefail
+          SSH="ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes $DEPLOY_USER@$DEPLOY_HOST"
+          # Falla temprano y con un mensaje útil: si app.conf no está, run_app.sh
+          # aborta con "no existe la definición", que no dice qué hacer.
+          if ! $SSH "test -f /opt/apps/mailbox/app.conf"; then
+            echo "::error::falta /opt/apps/mailbox/app.conf en $DEPLOY_HOST"
+            echo "::error::Crear (necesita root):"
+            echo "::error::  sudo mkdir -p /opt/apps/mailbox"
+            echo "::error::  sudo cp app.conf /opt/apps/mailbox/app.conf"
+            echo "::error::Contenido en deploy/app.conf de este repo"
+            exit 1
+          fi
+          if ! $SSH "test -f /etc/mailbox.env"; then
+            echo "::error::falta /etc/mailbox.env en $DEPLOY_HOST"
+            echo "::error::Crear (necesita root): sudo install -m 600 -o root -g root /dev/null /etc/mailbox.env"
+            echo "::error::Luego llenarlo con HUB_DB_* (ver deploy/env.local.example)"
+            exit 1
+          fi
+          echo "ok · app.conf y mailbox.env están en el servidor"
+
+      - name: Chquear puertos
+        run: |
+          set -euo pipefail
+          SSH="ssh -i ~/.ssh/id_deploy -o BatchMode=yes $DEPLOY_USER@$DEPLOY_HOST"
+          $SSH "sudo /usr/bin/bash /opt/apps/_lib/check-ports.sh mailbox" || true
+
+      - name: Bajar imagen y recrear contenedor
+        run: |
+          set -euo pipefail
+          SSH="ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes $DEPLOY_USER@$DEPLOY_HOST"
+
+          # Sin secretos en el comando remoto: run_app.sh sourcea /etc/mailbox.env
+          # solo. Mandarlos por acá los escribiría en el historial del servidor y
+          # exigiría `sudo -E` (SETENV), que el sudoers no permite.
+          $SSH "bash -s" <<REMOTE
+          set -euo pipefail
+          IMAGE='${{ env.IMAGE }}:${{ env.TAG }}'
+
+          echo "--- bajando imagen ---"
+          sudo docker pull "\$IMAGE"
+
+          echo "--- recreando contenedor (núcleo común, sin arrancar) ---"
+          # El override viaja como variable del comando sudo (`sudo VAR=x cmd`),
+          # que sudo 1.9 sí preserva; lo que NO se permite es `-E`, que exige
+          # SETENV. Así el SHA no queda en el historial del shell del servidor.
+          sudo APP_IMAGE_OVERRIDE="\$IMAGE" /usr/bin/bash /opt/apps/_lib/run_app.sh mailbox
+
+          echo "--- estado final ---"
+          sudo docker inspect -f 'estado={{.State.Status}} imagen={{.Image}}' mailbox
+          REMOTE
+
+      - name: Publicar el estado
+        run: |
+          {
+            echo ""
+            echo "### Estado en el servidor"
+            echo ""
+            echo "- imagen: \`${{ env.IMAGE }}:${{ env.TAG }}\`"
+            echo "- digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- **contenedor recreado pero NO arrancado** (\`APP_AUTO_START=0\`)"
+            echo ""
+            echo "Para activarlo:"
+            echo '```'
+            echo "ssh deploy@10.188.141.17 'sudo docker start mailbox'"
+            echo '```'
+            echo ""
+            echo "Para verificar salud:"
+            echo '```'
+            echo "ssh deploy@10.188.141.17 'sudo /usr/bin/bash /opt/apps/_lib/verify_app.sh mailbox'"
+            echo '```'
+            echo ""
+            echo "Para volver a una versión anterior:"
+            echo '```'
+            echo "ssh deploy@10.188.141.17 'sudo APP_IMAGE_OVERRIDE=ghcr.io/hector1516/eccsa-mailbox:<sha-anterior> \\"
+            echo "  /usr/bin/bash /opt/apps/_lib/run_app.sh mailbox'"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

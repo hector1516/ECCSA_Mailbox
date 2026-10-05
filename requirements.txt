@@ -1,0 +1,44 @@
+# Mailbox ECCSA — dependencias del backend.
+#
+# These versions come from the ECOSA ecosystem mandate and live in
+# ECCSA-Shell/versiones/requisitos-canonicos.txt — it's Field's list. Field is
+# the reference and is not modified; Mailbox matches it on everything the apps
+# share, so a PDF or a push notification looks and behaves the same no matter
+# which app sends it.
+#
+# What's NOT here (and why):
+#   reportlab / Pillow → Mailbox doesn't generate PDFs and doesn't process
+#                        images. Adding them would add ~40 MB to the image for
+#                        nothing.
+#   google-generativeai → no IA in this app.
+#   pysmb → the SMB share is used by the WORKER, in another container. This app
+#            doesn't touch the share.
+#   selenium / Playwright → not used.
+
+# ── API web ───────────────────────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+pydantic==2.9.0
+python-multipart==0.0.9
+
+# ── Autenticación ─────────────────────────────────────────────────────────────
+# pyjwt: the stateless challenges of the passkeys (WebAuthn) are JWTs, so they
+#        survive a restart and work with more than one worker.
+# webauthn: verification of passkeys, with rpId at the ecc-sa.com.mx root.
+pyjwt==2.9.0
+webauthn==3.0.0
+
+# ── Notificaciones push ───────────────────────────────────────────────────────
+pywebpush==2.0.0
+py-vapid==1.9.1
+# cryptography: the EC P-256 key pair for VAPID is generated here, and Fernet
+#              encrypts the mailbox passwords (in the worker). It also arrives as
+#              a dependency of pywebpush, but it's listed explicitly because it's
+#              imported directly.
+cryptography==43.0.3
+
+# ── Datos ─────────────────────────────────────────────────────────────────────
+# pymssql/FreeTDS speaks SQL Server. NOTE: no placeholders `?` in this ecosystem
+# — pymssql is DB-Lib and uses `%s`.
+pymssql==2.2.11
+pytz

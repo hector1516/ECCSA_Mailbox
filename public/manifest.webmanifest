@@ -1,0 +1,80 @@
+{
+	"name": "Mailbox ECCSA",
+	"short_name": "Mailbox",
+	"id": "/",
+	"start_url": "/?v=0.1.0",
+	"scope": "/",
+	"display": "standalone",
+	"display_override": ["standalone", "minimal-ui"],
+	"orientation": "portrait-primary",
+	"background_color": "#0F172A",
+	"theme_color": "#0F172A",
+	"description": "Buzón corporativo ECCSA — correos, firmas y adjuntos",
+	"lang": "es-MX",
+	"dir": "ltr",
+	"categories": ["business", "productivity", "utilities"],
+	"icons": [
+		{
+			"src": "/icons/icon-120x120.png",
+			"sizes": "120x120",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-152x152.png",
+			"sizes": "152x152",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-167x167.png",
+			"sizes": "167x167",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-180x180.png",
+			"sizes": "180x180",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-192x192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-512x512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-512-maskable.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "maskable"
+		}
+	],
+	"shortcuts": [
+		{
+			"name": "Bandeja",
+			"short_name": "Bandeja",
+			"url": "/?v=0.1.0",
+			"icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+		},
+		{
+			"name": "Firmas",
+			"short_name": "Firmas",
+			"url": "/firmas?v=0.1.0",
+			"icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+		},
+		{
+			"name": "Notificaciones",
+			"short_name": "Alertas",
+			"url": "/notificaciones?v=0.1.0",
+			"icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+		}
+	]
+}

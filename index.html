@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es">
+	<head>
+		<meta charset="UTF-8" />
+		<!-- `viewport-fit=cover` + `user-scalable=no`: sin esto la barra de
+		     pestañas de abajo queda debajo del home indicator del iPhone y el
+		     doble toque hace zoom sobre los botones. Es el mismo head que Field
+		     y Admon, y a proposito: son PWA, no paginas web. -->
+		<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+		<meta name="theme-color" content="#0F172A" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+		<meta name="apple-mobile-web-app-title" content="Mailbox" />
+		<meta name="description" content="Buzón corporativo ECCSA — correos, firmas y adjuntos" />
+		<meta name="mobile-web-app-capable" content="yes" />
+
+		<!-- ── Icons de Apple ──────────────────────────────────────────────
+		     Los 180/167/152/120 son los que iOS busca cuando el usuario toca
+		     "Agregar a pantalla de inicio". apple-touch-icon sin tamano attr
+		     cubre Safari en pestana; los otros con sizes covers el PWA instalado. -->
+		<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180x180.png" />
+		<link rel="apple-touch-icon" sizes="167x167" href="/icons/icon-167x167.png" />
+		<link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152x152.png" />
+		<link rel="apple-touch-icon" sizes="120x120" href="/icons/icon-120x120.png" />
+		<link rel="apple-touch-startup-image" href="/icons/icon-512x512.png" />
+
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+		<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192x192.png" />
+		<link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512x512.png" />
+
+		<!-- Outfit, la misma fuente que las demas apps. -->
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+		<title>Mailbox · ECCSA</title>
+		<style>
+			/* Evita el destello blanco antes de que cargue el CSS del shell. */
+			html, body { background: #0F172A; margin: 0; }
+		</style>
+	</head>
+	<body>
+		<div id="app"></div>
+		<script type="module" src="/src/main.js"></script>
+		<script>
+			// Force cache bust: si la versión guardada no coincide, recargar sin caché.
+			// El número tiene que coincidir con package.json Y con public/changelog.json;
+			// check.yml falla el build si divergen. Ver AGENTS.md §Versionado.
+			try {
+				var cur = '0.1.0';
+				var stored = localStorage.getItem('mailbox_app_version');
+				if (stored && stored !== cur) {
+					localStorage.setItem('mailbox_app_version', cur);
+					location.replace(location.pathname + '?_t=' + Date.now());
+				}
+				localStorage.setItem('mailbox_app_version', cur);
+			} catch(e) {}
+			// Registrar service worker al arrancar
+			if ('serviceWorker' in navigator) {
+				navigator.serviceWorker.register('/sw.js').catch(() => {});
+				navigator.serviceWorker.addEventListener('message', (e) => {
+					if (e.data && e.data.type === 'FORCE_RELOAD') location.reload();
+				});
+			}
+		</script>
+	</body>
+</html>

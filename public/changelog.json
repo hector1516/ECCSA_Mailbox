@@ -1,0 +1,11 @@
+{
+	"app": "mailbox",
+	"version": "0.1.0",
+	"cambios": [
+		"📬 Mailbox: tu correo corporativo de ECCSA en el teléfono. Una tarjeta por cuenta y todo en un solo lugar.",
+		"🔑 Entra con tu contraseña de siempre o con la MISMA passkey que usas en Field y Admon: no se registra nada nuevo.",
+		"📎 Los adjuntos se descargan directo a tu dispositivo cuando los abres. No se guardan en el servidor ni ocupan espacio.",
+		"🔔 Avisos cuando llega un correo nuevo. En iPhone te decimos paso a paso cómo activarlos, porque el navegador no avisa solo.",
+		"✍️ Firmas con colores, tablas y tu logo. Elige cuáles van en qué cuenta."
+	]
+}

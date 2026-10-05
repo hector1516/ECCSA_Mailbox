@@ -1,0 +1,17 @@
+# El entrypoint, los scripts de deploy y los .conf DEBEN ir con LF.
+# Un CRLF en un script de shell hace que el shebang no se reconnue y el contenedor
+# no arranca. En el ServerVM esto se rompió dos veces.
+*.sh    text eol=lf
+*.py    text eol=lf
+*.conf  text eol=lf
+*.ps1   text eol=crlf
+*.sql   text eol=crlf
+Dockerfile        text eol=lf
+.gitattributes    text eol=lf
+.gitignore        text eol=lf
+*.svelte          text eol=lf
+*.js              text eol=lf
+*.css             text eol=lf
+*.json            text eol=lf
+*.png             binary
+*.ico             binary

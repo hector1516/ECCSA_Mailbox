@@ -1,0 +1,34 @@
+# Node / build
+node_modules/
+dist/
+build/
+.svelte-kit/
+.vite/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Credenciales — NUNCA versionadas.
+# Los secretos llegan por `docker run --env-file /etc/mailbox.env` en el server.
+# Ver deploy/DEPLOY.md.
+secretos_local.py
+.env
+.env.*
+!.env.example
+
+# Playwright / herramientas
+.playwright/
+*.log
+.DS_Store
+Thumbs.db
+
+# Datos locales de desarrollo
+tests/__pycache__/
+
+# Capturas de la prueba visual: se regeneran con
+#   bash tools/prueba_visual/capturar.sh 430|900|1440
+tools/prueba_visual/captura-*.png

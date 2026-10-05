@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mailbox · prueba visual de la grilla</title>
+
+<!--
+  Prueba visual de la HOME de Mailbox.
+
+  Para qué: `.module-card` y `.module-badge` los define el ECCSA-Shell y no se
+  editan en la app. La única forma de saber cómo se ven de verdad —y no lo que
+  dice el CSS— es renderizarlos. Esta página monta la grilla con el CSS
+  COMPILADO de dist/ (el mismo que va en producción), con los casos límite: 0 no
+  leídos, 1, 9, 42, y el tope de "99+".
+
+  Correrla:  bash tools/prueba_visual/capturar.sh
+  Sale un captura.png al lado de este archivo.
+
+  OJO: hay que compilar antes (`npm run build`), porque el CSS que se prueba es
+  dist/assets/index-*.css y no existe hasta que vite corre.
+-->
+<link rel="stylesheet" href="../../dist/assets/index-hW3DDjN0.css">
+<style>
+	/* Solo el andamiaje de la prueba. Nada de esto va en la app. */
+	body { margin: 0; background: var(--color-bg); }
+
+	/* El logo del header lo estiliza Home.svelte (CSS de la app, no del shell),
+	   así que en esta página hay que duplicarlo para que se vea como en
+	   producción. El resto de lo que aparece abajo es 100% del shell. */
+	.brand-col { display: flex; flex-direction: column; gap: 0; }
+	.brand { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 1.2rem; }
+	.brand-logo {
+		width: 34px; height: 34px; object-fit: cover; border-radius: 8px;
+	}
+	.wrap { max-width: 1600px; margin: 0 auto; padding-bottom: 2rem; }
+	.titulo {
+		font-size: 0.68rem; color: var(--color-text-muted);
+		text-transform: uppercase; letter-spacing: 0.08em;
+		padding: 1rem 1rem 0.5rem;
+	}
+	.nota {
+		font-size: 0.75rem; color: var(--color-text-muted);
+		line-height: 1.5; padding: 0.5rem 1rem 1rem;
+	}
+	.nota b { color: var(--color-text); }
+	.con-mark { display: grid; gap: 0.75rem; padding: 0 1rem; }
+
+	/* El shell le pone min-height:100dvh a .page, que en una app real está bien
+	   (la página ocupa la pantalla). En ESTA página de prueba eso tapaba las
+	   secciones de abajo, porque the alta de una sola sección ya llenaba la ventana.
+	   Por eso la primera sección usa .page pero sin el alto mínimo. */
+	.con-mark .page, .page-prueba { min-height: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+	<div class="titulo">Home · las columnas las decide el shell según el ancho</div>
+	<div class="page page-prueba" style="padding-top:0">
+		<div class="header">
+			<div class="brand-col">
+				<h1 class="brand">
+					<img class="brand-logo" src="../../public/mailbox_marca.png" alt="Mailbox"> Mailbox
+				</h1>
+			</div>
+			<div class="shell-actions">
+				<button class="btn btn-sm btn-secondary" title="Novedades">📋</button>
+				<button class="btn btn-sm btn-secondary" title="Cerrar sesión">🚪 Salir</button>
+			</div>
+		</div>
+
+		<!--
+		  El contador de no leídos va en `.module-badge`, que el shell posiciona
+		  absoluto en la esquina (top:10px right:10px) de la tarjeta. Por eso se
+		  ve SUPERPUESTO sobre la tarjeta y no empuja nada.
+		-->
+		<div class="module-grid">
+			<button class="module-card">
+				<span class="module-icon">📬</span>
+				<span class="module-title">Ventas Oaxaca</span>
+				<span class="module-desc">ventas.oaxaca@ecc-sa.com.mx</span>
+				<span class="module-badge">1</span>
+			</button>
+			<button class="module-card">
+				<span class="module-icon">📮</span>
+				<span class="module-title">Operaciones</span>
+				<span class="module-desc">operaciones@ecc-sa.com.mx</span>
+				<span class="module-badge">42</span>
+			</button>
+			<!-- Tope: en Home.svelte es `{n > 99 ? '99+' : n}`, así que 99+ es lo
+			     más ancho que se puede ver. La píldora crece con el texto. -->
+			<button class="module-card">
+				<span class="module-icon">📨</span>
+				<span class="module-title">Compras</span>
+				<span class="module-desc">compras@ecc-sa.com.mx</span>
+				<span class="module-badge">99+</span>
+			</button>
+			<!-- Sin contador: no leídos en cero. No se pinta nada. -->
+			<button class="module-card">
+				<span class="module-icon">📧</span>
+				<span class="module-title">Soporte</span>
+				<span class="module-desc">soporte@ecc-sa.com.mx</span>
+			</button>
+			<!-- Una tarjeta de herramienta: mismo componente, sin contador. -->
+			<button class="module-card">
+				<span class="module-icon">✍️</span>
+				<span class="module-title">Firmas</span>
+				<span class="module-desc">Tu firma y sus imágenes</span>
+			</button>
+			<!-- Estado "apagada" del shell: se ve, no se entra. -->
+			<button class="module-card off">
+				<span class="module-icon">🔒</span>
+				<span class="module-title">Pausada</span>
+				<span class="module-desc">deshabilitada por el admin</span>
+			</button>
+		</div>
+	</div>
+
+	<div class="nota">
+		<p><b>Sobre los anchos:</b> el shell decide las columnas por resolución
+		(2 &lt;560px · 3 ≥560 · 4 ≥900 · 5 ≥1280). Esta página ya no fuerza las suyas:
+		probar 5 columnas en una pantalla de 430px dio un falso positivo en el que el
+		contador se montaba sobre el ícono, algo que <b>no puede pasar</b> en la app
+		real porque a 1280px cada tarjeta mide ~230px. Para ver los cortes de verdad
+		hay que capturar la misma página a distintos anchos:</p>
+		<p><code>bash tools/prueba_visual/capturar.sh 430</code> ·
+		<code>bash tools/prueba_visual/capturar.sh 900</code> ·
+		<code>bash tools/prueba_visual/capturar.sh 1440</code></p>
+	</div>
+
+	<div class="nota">
+		<b>Lo que hay que mirar en esta captura:</b><br>
+		· el contador se ve <b>superpuesto</b> en la esquina y no empuja la tarjeta<br>
+		· <b>99+</b> crece a píldora y sigue leyéndose (el ancho lo da min-width + padding)<br>
+		· todas las tarjetas de una fila miden <b>lo mismo</b>, aunque un título ocupe 2 líneas<br>
+		· el fondo <b>engrane</b> se insinúa detrás de todo
+	</div>
+
+</div>
+</body>
+</html>
