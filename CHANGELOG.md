@@ -7,6 +7,93 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-06 — Los correos no se veían: el front leía el sobre, no la lista
+
+El endpoint de mensajes devuelve un sobre paginado
+`{mensajes: [...], total, pagina, limite, no_leidos}` y `Cuenta.svelte` le
+asignaba **el sobre entero** a la variable `mensajes`. El `{#each}` iteraba
+sobre las 5 claves del objeto (`"mensajes"`, `"total"`, …) y no sobre los
+correos, así que cada fila salía con remitente y asunto vacíos. Los 212 correos
+de `hector.pena@` estaban en la base y en la API, y no se veían.
+
+De paso, el mismo endpoint devolvía `no_leidos = total`, o sea el número de
+**todos** los correos en vez de los sin leer. La pestaña marcaba 212 con 212
+correos ya leídos: un número que no significa nada y hace que el contador sea
+descartable.
+
+### 2026-10-06 — Carpetas de verdad, y "No leídos" como primera pestaña
+
+- Las carpetas **no son más dos literales** escritos en el front: se piden al
+  backend, que las lee del catálogo.
+- **`HUB_MailboxCarpetas`** (migración `0053`). Antes las pestañas se armaban
+  con `GROUP BY Carpeta` sobre los mensajes, y una carpeta **vacía no existía
+  para la app**: el usuario la creaba, no aparecía, y para moverle un correo
+  tendría que escribir el nombre a ciegas. Lo que no se ve no se puede usar.
+  El conteo se calcula en la consulta, no se duplica en la tabla.
+- **`HUB_MailboxColaOperaciones.IdMensaje` pasa a NULL** (migración `0052`).
+  Todas las operaciones que se inventaron eran "qué le hago A ESTE MENSAJE";
+  crear una carpeta no tiene mensaje. Se hizo nullable en vez de crear otra
+  tabla porque la cola ya tenía cuenta, usuario, estado, reintentos y error.
+  Un `CHECK` deja explícito que mensaje y operación de cuenta son excluyentes:
+  sin él un bug del worker lee un `NULL` y falla con un error que no dice qué pasó.
+- Nueva pestaña **"No leídos"** primero: es una *pseudocarpeta* (no existe en
+  IMAP, es `Visto = 0` sobre todas las carpetas) y va primero porque lo que
+  quiere ver quien abre la app es qué hay pendiente, no el último correo que
+  llegó.
+- El worker registra en el catálogo las carpetas que crea, y `imap_client` gana
+  `create_folder()`, que traduce el nombre a **modified UTF-7** (lo exige IMAP
+  para acentos) y devuelve el nombre **que reporta el servidor**, no el pedido:
+  indexar por el nombre pedido deja las pestañas apuntando a una carpeta que no
+  existe.
+
+### 2026-10-06 — Paginación y lista
+
+- `Paginacion.svelte`, **copiado del módulo de Cotizaciones Materiales de Admon**
+  para que el paginador se vea y se maneje igual en las dos apps. Es el mismo
+  componente, no una versión parecida: dos paginadores que se comportan distinto
+  son dos fuentes de queja.
+- El listado trae **remitente con su correo debajo**, **dos líneas de extracto**
+  y el **clip de adjuntos**. A una línea del extracto casi siempre se decide mal
+  si un correo se abre o se borra, y con solo el nombre dos remitentes "Juan
+  Pérez" de empresas distintas son indistinguibles.
+- 25 por página, no 50: con remitente más dos líneas de extracto, 50 tarjetas son
+  una pantalla muy larga.
+
+### 2026-10-06 — Responder a todos, reenviar y mover
+
+Los tres botones que faltaban en el detalle del mensaje.
+
+- **"Responder a todos"** no es solo poner a la gente en `para`: es **no volver
+  a meter a este usuario**. Si quien responde es una cuenta de la empresa (y lo
+  son 12 de las 13), incluirse a sí mismo produce un correo que vuelve a la misma
+  casilla y reaparece en los pendientes, para siempre. Se comparan **todas** las
+  direcciones contra la cuenta propia y se quitan, sin importar de qué campo
+  vinieron. Los que venían en CC no se Promote a `para`.
+- `para` y `cc` llegan como el **header crudo** (`"Juan Pérez" <j@x.com>`), no
+  como arreglo: se sacan con expresión regular y no partiendo por comas, porque
+  un nombre puede traer la coma **dentro** entre comillas.
+- `Redactar.svelte` ahora lee `cc` del borrador. No lo leía: el CC de "Responder
+  a todos" se perdía en silencio.
+- **Mover a carpeta** reutiliza la cola de operaciones que ya existía (`move` con
+  IMAP COPY), y el destino se lista del catálogo, para poder mover a una carpeta
+  recién creada.
+
+### 2026-10-06 — El icono de oficina/remoto llevaba días en 500
+
+`/api/shell/state` devolvía **500** desde el primer despliegue con
+`ModuleNotFoundError: No module named 'lugar'`, así que el `SyncHeader` entero
+—icono de oficina/remoto, versiones, usuario— nunca apareció. En la app no se
+veía ningún error porque el shell se come el fallo del banner.
+
+La causa: `api/main.py` hacía `from lugar import lugar_de` (import de primer
+nivel) cuando el contenedor arranca con `uvicorn api.main:app` desde `/app`, y
+ahí la carpeta `api/` **no** está en `sys.path`. En local sí funcionaba, porque
+se lanzaba uvicorn desde dentro de `api/`: **el bug solo vivía en producción**.
+Es `from api.lugar import lugar_de`, como en Admon, y se agregó el
+`api/__init__.py` que faltaba.
+
+## [Pendiente] — Trabajo no liberado
+
 ### 2026-10-06 — La clave VAPID estaba en PEM y ningún push podía salir
 
 El push de prueba respondía **502 "no se pudo enviar a ningún dispositivo"**, y

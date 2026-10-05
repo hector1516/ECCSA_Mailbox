@@ -404,7 +404,18 @@ def shell_state(request: Request, usuario: dict = Depends(get_current_user)):
     # X-Real-IP → socket. Leer X-Real-IP primero haría que TODO el mundo salga
     # "oficina", porque el proxy del ServerVM reescribe X-Real-IP con la IP
     # privada del puente de Docker. Delante de Cloudflare esto importa más.
-    from lugar import lugar_de
+    #
+    # `api.lugar`, NO `lugar`: el contenedor arranca con
+    # `uvicorn api.main:app` desde `/app`, así que la carpeta `api/` NO está en
+    # sys.path y un import de primer nivel revienta con
+    # `ModuleNotFoundError: No module named 'lugar'`.
+    #
+    # Pasó: este endpoint devolvió 500 desde el primer despliegue y el
+    # SyncHeader entero (icono de oficina/remoto, versiones, usuario) nunca
+    # apareceu, sin error visible en la app porque el shell se come el fallo del
+    # banner. El import de primer nivel sí funcionaba en local, porque ahí se
+    # lanzaba uvicorn desde dentro de `api/`: el bug solo vivía en producción.
+    from api.lugar import lugar_de
 
     modo, ip = lugar_de(request.headers, request.client.host if request.client else "")
 
@@ -525,8 +536,18 @@ def listar_mensajes(
     pagina = max(1, int(pagina or 1))
     carpeta = (carpeta or "INBOX")[:100]
 
-    condiciones = ["IdCuenta = %s", "Carpeta = %s"]
-    params: list = [cuenta_id, carpeta]
+    # "NOLEIDOS" es una PSEUDOCARPETA: no existe en IMAP, es un atajo a
+    # `Visto = 0` sin filtro de carpeta. Se maneja aquí y no como una columna
+    # más porque si se guardara como `Carpeta` el sincronizador del worker
+    # borraría la fila en el siguiente ciclo: el origen de verdad de `Carpeta`
+    # es el servidor de correo, no nuestra copia.
+    solo_no_leidos = carpeta.upper() == "NOLEIDOS"
+    if solo_no_leidos:
+        condiciones = ["IdCuenta = %s", "Visto = 0"]
+        params: list = [cuenta_id]
+    else:
+        condiciones = ["IdCuenta = %s", "Carpeta = %s"]
+        params = [cuenta_id, carpeta]
 
     if buscar.strip():
         condiciones.append("(Asunto LIKE %s OR RemitenteNombre LIKE %s OR RemitenteEmail LIKE %s OR Extracto LIKE %s)")
@@ -569,7 +590,134 @@ def listar_mensajes(
         "total": total,
         "pagina": pagina,
         "limite": limite,
-        "no_leidos": total if carpeta == "INBOX" else 0,
+        "no_leidos": _no_leidos_cuenta(cuenta_id),
+    }
+
+
+def _no_leidos_cuenta(cuenta_id: int) -> int:
+    """
+    Cuántos correos sin leer tiene la cuenta, en todas sus carpetas.
+
+    Antes este endpoint devolvía `no_leidos = total` cuando la carpeta era
+    INBOX, o sea el número de TODOS los correos, no de los sin leer. El contador
+    de la pestaña marcaba 207 con 207 correos ya leídos, que es un número que
+    no significa nada y hace que el contador sea descartable.
+    """
+    fila = _una("SELECT COUNT(*) AS Total FROM HUB_MailboxMensajes "
+                "WHERE IdCuenta = %s AND Visto = 0", (cuenta_id,))
+    return int(fila["Total"]) if fila else 0
+
+
+class CarpetaReq(BaseModel):
+    # Sin `Field(max_length=...)`: `Field` no viene importado en este módulo y
+    # usarlo rompe el import de TODO api.main, o sea la app entera, no solo este
+    # endpoint. El largo se valida abajo, donde además se puede dar un mensaje
+    # de error en español. Un `str` pelado de pydantic no es un problema: lo
+    # que llega es un string o el pydantic lo rechaza.
+    nombre: str = ""
+
+
+@app.post("/api/mailbox/cuentas/{cuenta_id}/carpetas")
+def crear_carpeta(cuenta_id: int, body: CarpetaReq, usuario: dict = Depends(require_mailbox)):
+    """
+    Pide crear una carpeta en IMAP. La app NO la crea: encola la operación y el
+    worker la hace con un IMAP CREATE.
+
+    Por qué en la cola y no un comando directo: la app no tiene las credenciales
+    IMAP (a propósito, para que no salgan del worker) y además la respuesta
+    sería lenta — un CREATE puede tardar segundos contra Gmail. Con la cola, la
+    pestaña aparece de inmediato y si el CREATE falla el usuario lo ve en la
+    operación, con el error del servidor de correo y no un 502 genérico.
+    """
+    if not _cuenta_del_usuario(cuenta_id, usuario):
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
+
+    nombre = (body.nombre or "").strip()
+    # IMAP usa sufijo para jerarquías. Se bloquea la barra invertida porque
+    # `create_folder` la traduce a ruta y un nombre con `..` dejaría crear
+    # carpetas fuera del buzón.
+    if not nombre:
+        raise HTTPException(status_code=400, detail="Escribe el nombre de la carpeta")
+    if "\\" in nombre or "/" in nombre or ".." in nombre or "," in nombre:
+        raise HTTPException(
+            status_code=400,
+            detail="El nombre no puede tener /, \\ ni ..",
+        )
+    if len(nombre) > 60:
+        raise HTTPException(status_code=400, detail="Máximo 60 caracteres")
+
+    ya_existe = _una(
+        "SELECT 1 AS Existe FROM HUB_MailboxMensajes WHERE IdCuenta = %s AND Carpeta = %s",
+        (cuenta_id, nombre),
+    )
+    if ya_existe:
+        raise HTTPException(status_code=409, detail=f"Ya existe la carpeta «{nombre}»")
+
+    _ejecuta(
+        "INSERT INTO HUB_MailboxColaOperaciones "
+        "(IdCuenta, IdUsuario, IdMensaje, Operacion, Valor, Estado, Creado) "
+        "VALUES (%s, %s, NULL, 'crear_carpeta', %s, 'PENDIENTE', GETDATE())",
+        (cuenta_id, usuario["Id"], nombre),
+    )
+    return {"ok": True, "nombre": nombre}
+
+
+@app.get("/api/mailbox/cuentas/{cuenta_id}/carpetas")
+def listar_carpetas(cuenta_id: int, usuario: dict = Depends(require_mailbox)):
+    """
+    Las carpetas de la cuenta para las pestañas, con su contador.
+
+    Las carpetas NO son una lista fija en el front: se leen del índice, que es
+    donde ya están porque el worker sincronizó INBOX y Sent. Lo que se agrega es
+    cualquier carpeta real de IMAP que el usuario haya creado.
+
+    Se devuelven INBOX y Sent aunque estén vacías, para que las pestañas no
+    desaparezcan y se puedan mover mensajes hacia ellas.
+    """
+    if not _cuenta_del_usuario(cuenta_id, usuario):
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
+
+    #
+    # Las carpetas salen del CATÁLOGO (HUB_MailboxCarpetas), no de un
+    # `GROUP BY Carpeta` sobre los mensajes. Con el GROUP BY una carpeta vacía
+    # no existe para la app: el usuario la crea, no aparece, y para moverle un
+    # correo tendría que escribir el nombre a ciegas.
+    #
+    # El conteo se hace con un LEFT JOIN desde el catálogo para que una carpeta
+    # sin mensajes salga con total=0 en vez de desaparecer de la fila.
+    #
+    # Se hace `UNION` con las carpetas que sí tienen mensajes en el índice pero
+    # no están en el catálogo: si el worker no ha registrado una carpeta y hay
+    # 200 correos dentro, esos correos tienen que verse igual.
+    filas = _filas(
+        "SELECT c.Nombre AS Carpeta, ISNULL(m.Total, 0) AS Total, "
+        "       ISNULL(m.NoLeidos, 0) AS NoLeidos "
+        "FROM HUB_MailboxCarpetas c "
+        "OUTER APPLY (SELECT COUNT(*) AS Total, "
+        "                     SUM(CASE WHEN Visto = 0 THEN 1 ELSE 0 END) AS NoLeidos "
+        "              FROM HUB_MailboxMensajes x "
+        "              WHERE x.IdCuenta = c.IdCuenta AND x.Carpeta = c.Nombre "
+        "                AND x.Eliminado = 0) m "
+        "WHERE c.IdCuenta = %s "
+        "UNION ALL "
+        "SELECT x.Carpeta, COUNT(*), SUM(CASE WHEN x.Visto = 0 THEN 1 ELSE 0 END) "
+        "FROM HUB_MailboxMensajes x "
+        "WHERE x.IdCuenta = %s AND x.Eliminado = 0 "
+        "  AND NOT EXISTS (SELECT 1 FROM HUB_MailboxCarpetas c2 "
+        "                  WHERE c2.IdCuenta = x.IdCuenta AND c2.Nombre = x.Carpeta) "
+        "GROUP BY x.Carpeta",
+        (cuenta_id, cuenta_id),
+    )
+
+    carpetas = [{"id": f["Carpeta"], "total": int(f["Total"] or 0),
+                 "no_leidos": int(f["NoLeidos"] or 0)} for f in filas]
+    for fija in ("INBOX", "Sent"):
+        if not any(c["id"] == fija for c in carpetas):
+            carpetas.append({"id": fija, "total": 0, "no_leidos": 0})
+
+    return {
+        "carpetas": carpetas,
+        "no_leidos": _no_leidos_cuenta(cuenta_id),
     }
 
 

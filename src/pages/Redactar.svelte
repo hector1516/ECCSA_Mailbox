@@ -52,6 +52,10 @@
 				try {
 					const d = JSON.parse(borr);
 					para = d.para || '';
+					// Sin esta línea el CC de "Responder a todos" se perdía en
+					// silencio: el borrador lo traía, nadie lo leía, y el correo
+					// salía solo a los destinatarios directos.
+					cc = d.cc || '';
 					asunto = d.asunto || '';
 					cuerpo = d.cuerpo || '';
 				} catch { /* borrador corrupto: se sigue con uno vacío */ }

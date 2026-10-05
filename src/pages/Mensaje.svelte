@@ -16,6 +16,8 @@
 	/** false = imágenes remotas bloqueadas (default). true = el usuario las pidió. */
 	let permitirRemotas = $state(false);
 	let descargando = $state(0);
+	let mostrarMover = $state(false);
+	let destinos = $state([]);
 
 	/**
 	 * CSP dentro del iframe.
@@ -141,14 +143,143 @@
 		}
 	}
 
+	/**
+	 * Los tres botones de respuesta arman el mismo borrador y lo pasan por
+	 * sessionStorage, no por la URL. Va en sessionStorage y no en query string
+	 * por una razón concreta: las direcciones de los destinatarios NO deben
+	 * quedar en el historial del navegador ni en el log del servidor. Con
+	 * `?para=...` el correo de un cliente queda escrito en la barra de
+	 * direcciones y en cualquier historial o captura de pantalla.
+	 *
+	 * `Redactar.svelte` lo consume y lo borra de inmediato (una vez), así que
+	 * un correo no sensible queda en memoria solo mientras se redacta.
+	 */
+	const ETIQUETAS = {
+		INBOX: { label: 'Entrada', icon: '📥' },
+		Sent: { label: 'Enviados', icon: '📤' },
+	};
+	function etiquetaCarpeta(id) {
+		return ETIQUETAS[id] || { label: id, icon: '📁' };
+	}
+
+	function _borrador(d) {
+		sessionStorage.setItem('mailbox_borrador', JSON.stringify(d));
+		navigate(`/redactar?cuenta=${msg.cuenta.id}`);
+	}
+
+	// Cita en HTML con el formato que el usuario espera de cualquier cliente de
+	// correo. El `border-left` es lo que hace que la columna de texto se separe
+	// del mensaje nuevo; sin él la cita se lee como parte de la respuesta.
+	function _cita(texto, fecha, nombre) {
+		return `<br><blockquote style="border-left:3px solid #ccc;padding-left:10px;margin-left:0;color:#555">` +
+			`El ${fecha}, ${nombre} escribió:<br>${texto || ''}</blockquote>`;
+	}
+
 	function responder() {
 		const asunto = (msg.asunto || '');
-		sessionStorage.setItem('mailbox_borrador', JSON.stringify({
+		const nombre = msg.remitente_nombre || msg.remitente_email || '';
+		_borrador({
 			para: msg.remitente_email || '',
 			asunto: /^re:/i.test(asunto) ? asunto : `Re: ${asunto}`,
-			cuerpo: `<br><br><blockquote>El ${msg.fecha}, ${msg.remitente_nombre || msg.remitente_email} escribió:</blockquote>`
-		}));
-		navigate(`/redactar?cuenta=${msg.cuenta.id}`);
+			cuerpo: _cita(msg.extracto || '', msg.fecha_correo || '', nombre)
+		});
+	}
+
+	/**
+	 * Saca direcciones de correo de un header.
+	 *
+	 * `para` y `cc` NO llegan como arreglo: llegan como el header crudo tal cual
+	 * lo dejó el servidor, o sea una cadena tipo
+	 * `"Juan Pérez" <juan@empresa.com>, maria@otra.com`. Recorrerla con un
+	 * `for...of` it'd devuelve CADA CARÁCTER por separado, y el correo saldría
+	 * con letras sueltas en el campo Para.
+	 *
+	 * Se usa una expresión regular en vez de partir por comas porque un nombre
+	 * puede traer la coma DENTRO entre comillas:
+	 * `"Pérez, Juan" <juan@x.com>`. Partir por coma rompe ese caso a la mitad.
+	 */
+	function _correos(header) {
+		if (!header) return [];
+		const sal = String(header).match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) || [];
+		return sal.map((d) => d.toLowerCase());
+	}
+
+	/**
+	 * Responder a todos.
+	 *
+	 * Lo difícil NO es poner a la gente en `para`, es NO volver a meter a este
+	 * usuario. Si quien responde es una cuenta de la empresa (y lo son 12 de las
+	 * 13 cuentas), incluirse a sí mismo produce un correo que vuelve a la misma
+	 * casilla y reaparece en la lista de pendientes, para siempre. Por eso se
+	 * comparan TODAS las direcciones contra la cuenta propia y se quitan, sin
+	 * importar de qué campo vinieron.
+	 *
+	 * Los destinatarios que ya venían en CC no se promoted a Para: se dejan en
+	 * CC. Cambiarlos de campo cambia la respuesta para todo el mundo.
+	 */
+	function responderATodos() {
+		const asunto = (msg.asunto || '');
+		const nombre = msg.remitente_nombre || msg.remitente_email || '';
+		const propio = (msg.cuenta.email || '').toLowerCase();
+
+		const para = [];
+		const cc = [];
+		const vistos = new Set();
+
+		for (const d of _correos(msg.para)) {
+			if (d === propio || vistos.has(d)) continue;
+			vistos.add(d);
+			para.push(d);
+		}
+		for (const d of _correos(msg.cc)) {
+			if (d === propio || vistos.has(d)) continue;
+			vistos.add(d);
+			cc.push(d);
+		}
+
+		// Si no hay nadie más, es un "responder" normal.
+		if (para.length === 0 && cc.length === 0) return responder();
+
+		_borrador({
+			para: para.join(', '),
+			cc: cc.join(', '),
+			asunto: /^re:/i.test(asunto) ? asunto : `Re: ${asunto}`,
+			cuerpo: _cita(msg.extracto || '', msg.fecha_correo || '', nombre)
+		});
+	}
+
+	function reenviar() {
+		_borrador({
+			para: '',
+			asunto: (msg.asunto || '').startsWith('Fw:') ? msg.asunto : `Fw: ${msg.asunto || ''}`,
+			cuerpo: `<br><br>---------- Correo reenviado ----------<br>` +
+				`De: ${msg.remitente_nombre || ''} &lt;${msg.remitente_email || ''}&gt;<br>` +
+				`Fecha: ${msg.fecha_correo || ''}<br>` +
+				`Asunto: ${msg.asunto || ''}<br><br>${msg.extracto || ''}`
+		});
+	}
+
+	/**
+	 * Mover a carpeta. El movimiento REAL lo hace el worker con un IMAP COPY;
+	 * la app solo encola la operación y actualiza la fila al instante, para
+	 * que el correo salga de la carpeta actual sin esperar el ciclo del worker.
+	 */
+	function abrirMover() {
+		mostrarMover = true;
+		api.get(`/mailbox/cuentas/${msg.cuenta.id}/carpetas`)
+			.then((r) => (destinos = (r.carpetas || []).filter((c) => c.id !== (msg.carpeta || ''))))
+			.catch(() => (destinos = []));
+	}
+
+	async function moverA(destino) {
+		mostrarMover = false;
+		try {
+			await api.post(`/mailbox/mensajes/${msg.id}/operacion`, { operacion: 'move', valor: destino });
+			avisar(`Movido a «${destino}». El worker lo aplica en su próximo ciclo.`, 'ok');
+			navigate(`/cuenta/${msg.cuenta.id}`);
+		} catch (e) {
+			avisar(e.message || 'No se pudo mover', 'error');
+		}
 	}
 
 	function tamano(bytes) {
@@ -308,15 +439,56 @@
 		{/if}
 
 		<div class="mv-acciones">
-			<!-- Responder lleva los datos por session_state, no por query: meter
-			     un correo en la URL lo pondría en el historial del navegador y en
-			     los logs del proxy. -->
+			<!-- Los tres de respuesta llevan los datos por sessionStorage, no por
+			     query: meter un correo en la URL lo pondría en el historial del
+			     navegador y en los logs del proxy. -->
 			<button class="btn btn-secondary" onclick={responder}>
 				↩️ Responder
+			</button>
+			<button class="btn btn-secondary" onclick={responderATodos}>
+				↩️↩️ Responder a todos
+			</button>
+			<button class="btn btn-secondary" onclick={reenviar}>
+				➜ Reenviar
+			</button>
+			<button class="btn btn-secondary" onclick={abrirMover}>
+				📁 Mover a carpeta
 			</button>
 			<button class="btn btn-secondary" onclick={() => operacion('delete')}>
 				🗑️ Borrar
 			</button>
+		</div>
+	{/if}
+
+	<!-- Mover a carpeta: la lista sale del índice y no de una constante, para
+	     poder mover a una carpeta que el usuario acaba de crear. -->
+	{#if mostrarMover && msg}
+		<div class="mv-overlay" role="dialog" aria-label="Mover a carpeta">
+			<div class="mv-modal">
+				<h2 class="mv-modal-titulo">📁 Mover a carpeta</h2>
+				<p class="mv-modal-nota">
+					El movimiento real lo hace el worker en tu correo. Aquí se actualiza al
+					instant para que no tengas que esperar.
+				</p>
+				{#if destinos.length === 0}
+					<p class="mv-modal-vacia">No hay otras carpetas donde moverlo.</p>
+				{:else}
+					<ul class="mv-modal-lista">
+						{#each destinos as d (d.id)}
+							<li>
+								<button class="mv-modal-item" onclick={() => moverA(d.id)}>
+									<span>{etiquetaCarpeta(d.id).icon}</span>
+									{etiquetaCarpeta(d.id).label}
+									<span class="mv-modal-count">{d.total}</span>
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				<button class="btn btn-secondary mv-modal-cerrar" onclick={() => (mostrarMover = false)}>
+					Cerrar
+				</button>
+			</div>
 		</div>
 	{/if}
 </div>
@@ -357,6 +529,49 @@
 	.mv-rutas b { color: var(--color-text); }
 
 	/* ── Adjuntos ────────────────────────────────────────────────────────── */
+	/* ── Modal "Mover a carpeta" ────────────────────────────────────────── */
+	.mv-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(2, 6, 23, 0.72);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1rem;
+		z-index: 60;
+	}
+	.mv-modal {
+		background: var(--color-surface);
+		border: 1px solid var(--color-line);
+		border-radius: var(--radius-md);
+		padding: 1.1rem;
+		width: min(26rem, 100%);
+		max-height: 80vh;
+		overflow-y: auto;
+	}
+	.mv-modal-titulo { margin: 0 0 0.4rem; font-size: 1.05rem; }
+	.mv-modal-nota { margin: 0 0 0.8rem; font-size: 0.78rem; color: var(--color-text-muted); }
+	.mv-modal-vacia { font-size: 0.85rem; color: var(--color-text-muted); }
+	.mv-modal-lista { list-style: none; margin: 0 0 0.9rem; padding: 0; }
+	.mv-modal-item {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		width: 100%;
+		text-align: left;
+		background: transparent;
+		border: 0;
+		border-bottom: 1px solid var(--color-line);
+		color: var(--color-text);
+		padding: 0.6rem 0.25rem;
+		font-size: 0.88rem;
+		font-family: inherit;
+		cursor: pointer;
+	}
+	.mv-modal-item:hover { background: rgba(255, 107, 0, 0.1); }
+	.mv-modal-count { margin-left: auto; font-size: 0.75rem; color: var(--color-text-muted); }
+	.mv-modal-cerrar { width: 100%; }
+
 	.mv-adjuntos {
 		background: var(--color-surface);
 		border: 1px solid rgba(255,255,255,0.05);
