@@ -43,13 +43,30 @@ y servir con FastAPI (que expone `dist/` en `/`).
 
 ### Migraciones
 
+Este repo trae **su propio** runner. No se usa el de WorkersAdmon: las
+migraciones de Mailbox viven acá, y el runner de WorkersAdmon solo mira su
+propio `migrations/`.
+
+Los dos escriben en la Misma tabla `schema_migrations`, que es compartida con
+HUB/Admon, y por eso los números no chocan: Mailbox arranca en `0048`, justo
+después del `0047` que ya existía.
+
 ```bash
 # contra la base de pruebas, SIEMPRE primero
-HUB_DB_DATABASE=ECCSA_Admon_Pruebas python3 ../WorkersAdmon/apply_migrations.py
+HUB_DB_DATABASE=ECCSA_Admon_Pruebas python3 apply_migrations.py --dry-run
+HUB_DB_DATABASE=ECCSA_Admon_Pruebas python3 apply_migrations.py
+
+# producción, a propósito (pide confirmación escrita)
+HUB_DB_DATABASE=ECCSA_Admon HUB_MIGRATE_PRODUCTION=1 python3 apply_migrations.py
 ```
 
 `0048` permiso `AccesoMailbox` + cuentas + sesiones · `0049` firmas ·
-`0050` suscripciones push.
+`0050` suscripciones push · `0051` mensajes, adjuntos, colas, reglas y
+auto-respuestas.
+
+El runner **aborta** si el destino no es una base de pruebas salvo que se pida
+producción explícitamente, y cada archivo corre en su propia transacción. Correrlo
+dos veces no cambia nada.
 
 ### El logo
 
@@ -104,12 +121,12 @@ vacía a propósito.
 | Fase | |
 |---|---|
 | 0 · esqueleto, shell, login, home | ✅ |
-| 1 · migraciones y cuentas | ✅ esquema · falta el panel que las crea |
-| 2 · `mailbox_worker` (sync) | ⬜ **lo más risky, va primero** |
-| 3 · lectura, búsqueda, streaming | ⬜ falta el visor |
-| 4 · firmas completas | ⬄ CRUD listo · falta el editor rico |
-| 5 · envío | ⬜ |
-| 6 · reglas y auto-respuestas | ⬜ |
+| 1 · migraciones y cuentas | ✅ las 4 aplicadas y verificadas; el panel que las crea vive en WorkersAdmon |
+| 2 · `mailbox_worker` (sync) | ✅ código y tests; falta desplegar y aplicar en producción |
+| 3 · lectura, búsqueda, streaming | ✅ visor, búsqueda y adjuntos transmitidos en rangos |
+| 4 · firmas completas | ✅ editor rico, imágenes con `cid:` y previsualización |
+| 5 · envío | ✅ compositor, cola y SMTP con la firma resuelta |
+| 6 · reglas y auto-respuestas | ⬄ reglas completas; falta la UI de alta de auto-respuestas |
 
 ---
 
