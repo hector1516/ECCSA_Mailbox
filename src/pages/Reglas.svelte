@@ -14,6 +14,76 @@
 	let guardando = $state(false);
 	let tab = $state('reglas');
 
+	// El editor de la auto-respuesta. Antes no existía: las auto-respuestas solo se
+	// listaban, aunque la API tuviera su CRUD completo (POST, PUT y DELETE en
+	// /mailbox/respuestas-automaticas). El botón de agregar nunca estuvo.
+	let editandoAuto = $state(null);
+	let guardandoAuto = $state(false);
+	let cuentas = $state([]);
+
+	function nuevaAuto() {
+		editandoAuto = {
+			id: null, mensaje: '', es_default: false,
+			solo_fuera_horario: true, excepciones_dominio: '', id_cuenta: null
+		};
+	}
+	function editarAuto(a) {
+		editandoAuto = { ...a, mensaje: (a.mensaje || '').replace(/<br\s*\/?>/gi, '\n') };
+	}
+	function cancelarAuto() { editandoAuto = null; }
+
+	async function guardarAuto() {
+		if (!editandoAuto.mensaje.trim()) {
+			avisar('Escribe el mensaje de la respuesta', 'warning');
+			return;
+		}
+		guardandoAuto = true;
+		try {
+			const cuerpo = {
+				mensaje: editandoAuto.mensaje,
+				es_default: !!editandoAuto.es_default,
+				solo_fuera_horario: !!editandoAuto.solo_fuera_horario,
+				excepciones_dominio: editandoAuto.excepciones_dominio || '',
+				id_cuenta: editandoAuto.id_cuenta || null,
+				activa: true
+			};
+			if (editandoAuto.id) {
+				await api.put(`/mailbox/respuestas-automaticas/${editandoAuto.id}`, cuerpo);
+			} else {
+				await api.post('/mailbox/respuestas-automaticas', cuerpo);
+			}
+			avisar('Respuesta automática guardada', 'success');
+			editandoAuto = null;
+			await cargar();
+		} catch (e) {
+			avisar(e.message || 'No se pudo guardar', 'error', 6000);
+		} finally {
+			guardandoAuto = false;
+		}
+	}
+
+	async function borrarAuto(a) {
+		if (!confirm('¿Borrar esta respuesta automática?')) return;
+		try {
+			await api.delete(`/mailbox/respuestas-automaticas/${a.id}`);
+			avisar('Respuesta automática borrada', 'info');
+			if (editandoAuto && editandoAuto.id === a.id) editandoAuto = null;
+			await cargar();
+		} catch (e) {
+			avisar(e.message || 'No se pudo borrar', 'error');
+		}
+	}
+
+	async function alternarAuto(a) {
+		try {
+			await api.put(`/mailbox/respuestas-automaticas/${a.id}`,
+				{ ...a, activa: !a.activa });
+			await cargar();
+		} catch (e) {
+			avisar(e.message || 'No se pudo cambiar', 'error');
+		}
+	}
+
 	// ── Campos y operadores disponibles ───────────────────────────────────────
 	// Las listas mandan: si acá queda un valor que el backend no acepta, el POST
 	// vuelve 400 y el usuario ve un error sin sentido.
@@ -59,12 +129,17 @@
 
 	async function cargar() {
 		try {
-			const [r, a] = await Promise.all([
+			const [r, a, cs] = await Promise.all([
 				api.get('/mailbox/reglas'),
-				api.get('/mailbox/respuestas-automaticas')
+				api.get('/mailbox/respuestas-automaticas'),
+				// Si el usuario no tiene cuentas, esta llamada puede fallar; no es
+				// razón para no cargar las reglas, así que el fallo se absorbs con
+				// un array vacío.
+				api.get('/mailbox/cuentas').catch(() => ({ cuentas: [] }))
 			]);
 			reglas = r || [];
 			respuestas = a.respuestas || [];
+			cuentas = cs.cuentas || [];
 		} catch (e) {
 			avisar(e.message || 'No se pudieron cargar', 'error');
 		}
@@ -241,34 +316,118 @@
 			</div>
 			<button class="btn btn-primary btn-block rl-nueva" onclick={nueva}>＋ Nueva regla</button>
 		{/if}
-	{:else}
+		<!--
+		  El editor va PRIMERO, no después de la lista. Con la lista vacía al
+		  principio, un formulario debajo del último elemento es un botón que
+		  nadie encuentra: la pantalla decía "sin respuestas automáticas" y el
+		  estado vacío mandaba a /firmas, que es otro módulo.
+		-->
+		{#if editandoAuto}
+			<div class="card rl-editor">
+				<h2>{editandoAuto.id ? 'Editar respuesta automática' : 'Nueva respuesta automática'}</h2>
+
+				<div class="field">
+					<label for="ra-mensaje">Mensaje</label>
+					<!--
+					  Un textarea, no el editor rico de las firmas, y a propósito: el
+					  worker escapa este texto al armarlo. Lo que se escribe es lo que
+					  llega. Con HTML guardado, un `<b>negrita</b>` llegaría al
+					  destinatario escrito de forma literal.
+					-->
+					<textarea id="ra-mensaje" class="input" rows="5"
+					          bind:value={editandoAuto.mensaje}
+					          placeholder="Hola, gracias por escribir. En este momento no estamos atendiendo el correo; te contestaremos a la brevedad."></textarea>
+					<p class="rl-pista">Texto plano. El que escribas es el que llega.</p>
+				</div>
+
+				<div class="field">
+					<label for="ra-cuenta">Solo en esta cuenta</label>
+					<select id="ra-cuenta" class="input" bind:value={editandoAuto.id_cuenta}>
+						<option value={null}>Todas mis cuentas</option>
+						{#each cuentas as c}
+							<option value={c.id}>{c.alias || c.email}</option>
+						{/each}
+					</select>
+					<p class="rl-pista">Déjalo en "todas" si la respuesta sirve igual para cualquier casilla.</p>
+				</div>
+
+				<div class="field">
+					<label for="ra-excep">Dominios exentos (coma)</label>
+					<input id="ra-excep" class="input" bind:value={editandoAuto.excepciones_dominio}
+					       placeholder="jefe@ecc-sa.com.mx, clientes.com" />
+					<p class="rl-pista">A esos dominios NO se les contesta automáticamente.</p>
+				</div>
+
+				<label class="rl-check">
+					<input type="checkbox" bind:checked={editandoAuto.solo_fuera_horario} />
+					<span>Solo fuera del horario de oficina (L-V 9:00 a 18:00)</span>
+				</label>
+
+				<label class="rl-check">
+					<input type="checkbox" bind:checked={editandoAuto.es_default} />
+					<span>Es la respuesta por defecto (la que se usa si no hay otra)</span>
+				</label>
+
+				<div class="acciones">
+					<button class="btn btn-primary" onclick={guardarAuto} disabled={guardandoAuto}>
+						{guardandoAuto ? 'Guardando…' : '💾 Guardar'}
+					</button>
+					<button class="btn" onclick={cancelarAuto}>Cancelar</button>
+				</div>
+
+				<p class="rl-pista">
+					Nunca se contesta a uno mismo ni a un correo del dominio de la
+					empresa, y no se encadena en bucle.
+				</p>
+			</div>
+		{:else}
+			<div class="acciones" style="margin-bottom:1rem">
+				<button class="btn btn-primary" onclick={nuevaAuto}>💤 Nueva respuesta automática</button>
+			</div>
+		{/if}
+
 		{#if respuestas.length === 0}
 			<div class="card rl-vacio">
 				<div class="rl-vacio-icon">💤</div>
 				<h2>Sin respuestas automáticas</h2>
 				<p>
 					Se usan cuando un correo llega a un buzón que no tiene a nadie
-					atendiendo, por ejemplo un permiso o una incapacitated.
+					atendiendo, por ejemplo un permiso o una incapacidad.
 				</p>
-				<a class="btn btn-primary" href="/firmas">Configurar desde Firmas</a>
+				{#if !editandoAuto}
+					<button class="btn btn-primary" onclick={nuevaAuto}>Crear la primera</button>
+				{/if}
 			</div>
 		{:else}
 			<div class="list">
 				{#each respuestas as a (a.id)}
-					<div class="card rl-fila">
+					<div class="card rl-fila" style="opacity:{a.activa ? 1 : 0.55}">
 						<div class="rl-fila-top">
 							<span class="rl-accion-icono">💤</span>
 							<div class="rl-fila-txt">
 								<strong>{a.es_default ? 'Respuesta por defecto' : 'Respuesta automática'}</strong>
 								<span>
-									{#if a.solo_fuera_horario}Solo fuera de horario · {/if}
-									{#if a.excepciones_dominio}excepto {a.excepciones_dominio}{/if}
+									{#if !a.activa}· desactivada ·{/if}
+									{#if a.solo_fuera_horario}Solo fuera de horario ·{/if}
+									{#if a.excepciones_dominio}excepto {a.excepciones_dominio} ·{/if}
+									{#if a.id_cuenta}
+										{cuentas.find((c) => c.id === a.id_cuenta)?.alias || 'una cuenta'}
+									{:else}Todas las cuentas{/if}
 								</span>
 							</div>
+							<button class="btn btn-sm" onclick={() => alternarAuto(a)} title={a.activa ? 'Desactivar' : 'Activar'}>
+								{a.activa ? '⏸️' : '▶️'}
+							</button>
+							<button class="btn btn-sm" onclick={() => editarAuto(a)}>✏️</button>
+							<button class="btn btn-sm" onclick={() => borrarAuto(a)}>🗑️</button>
 						</div>
-						<div class="rl-firma-preview">
-							<iframe title="Respuesta automática" sandbox="" srcdoc={a.mensaje} style="height:90px"></iframe>
-						</div>
+						<!--
+						  El mensaje se pinta como TEXTO, no en un iframe con srcdoc.
+						  Es la misma frontera cid:/URL del resto de la app, vista del
+						  otro lado: aquí lo que hay que proteger es al ADMINISTRADOR
+						  que lo ve.
+						-->
+						<pre class="ra-texto">{a.mensaje}</pre>
 					</div>
 				{/each}
 			</div>
@@ -277,6 +436,18 @@
 </div>
 
 <style>
+	/* El mensaje de la auto-respuesta: texto plano, con los saltos de línea
+	   respetados y sin Courier de máquina: se lee como una nota, no como un log. */
+	.ra-texto {
+		white-space: pre-wrap; word-break: break-word;
+		font-family: inherit; font-size: .92rem; line-height: 1.5;
+		color: var(--color-text-dim, #94A3B8);
+		background: rgba(0,0,0,.18);
+		border-left: 2px solid rgba(255,255,255,.08);
+		border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+		padding: .7rem .85rem; margin: .6rem 0 0;
+	}
+
 	.brand-col { display: flex; align-items: center; gap: 0.75rem; }
 	.brand { font-size: 1.2rem; margin: 0; }
 

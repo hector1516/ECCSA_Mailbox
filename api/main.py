@@ -2428,9 +2428,28 @@ def listar_auto(usuario: dict = Depends(require_mailbox)):
     }
 
 
+# La respuesta automática se guarda como TEXTO PLANO, no como HTML. La razón es
+# que el worker la envuelve escapándola (`escapar(cuerpo)` en filtros.py): si acá
+# se guardara HTML, el destinatario recibiría `<b>negrita</b>` escrito de forma
+# literal, y una barra invertida de más en el texto se vería como una etiqueta.
+#
+# Guardarla como texto además es lo correcto por sí solo: un auto-responder es un
+# aviso, no una carta, y no necesita imágenes ni estilos. La consecuencia es que el
+# editor de esta pantalla es un textarea y no un editor rico, a propósito.
+def _texto_auto(bruto: str) -> str:
+    """Normaliza el texto de una auto-respuesta. Devuelve "" si no queda nada."""
+    # Se normalizan los saltos de línea: un textarea en Windows manda CR+LF y
+    # el CR suelto viaja en el correo, donde se ve como un carácter raro al
+    # final de cada línea.
+    texto = re.sub(r"[\r\n\r]+", "\n", bruto or "").strip()
+    # El tope evita que alguien pegue un romanzo y cada correo saliente lo mande
+    # entero. 4000 caracteres es un auto-responder largo y sigue siendo razonable.
+    return texto[:4000]
+
+
 @app.post("/api/mailbox/respuestas-automaticas")
 def crear_auto(body: AutoRespuestaReq, usuario: dict = Depends(require_mailbox)):
-    mensaje = _sanitizar_html(body.mensaje)
+    mensaje = _texto_auto(body.mensaje)
     if not mensaje:
         raise HTTPException(status_code=400, detail="La respuesta está vacía")
     cur = get_connection().cursor()
@@ -2450,7 +2469,7 @@ def crear_auto(body: AutoRespuestaReq, usuario: dict = Depends(require_mailbox))
 
 @app.put("/api/mailbox/respuestas-automaticas/{respuesta_id}")
 def actualizar_auto(respuesta_id: int, body: AutoRespuestaReq, usuario: dict = Depends(require_mailbox)):
-    mensaje = _sanitizar_html(body.mensaje)
+    mensaje = _texto_auto(body.mensaje)
     if not mensaje:
         raise HTTPException(status_code=400, detail="La respuesta está vacía")
     n = _ejecuta(

@@ -7,6 +7,33 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-05 — Las respuestas automáticas no se podían crear
+
+La pestaña listaba las respuestas automáticas pero no había forma de **dar de
+alta ninguna**: el botón nunca estuvo. La API sí tenía su CRUD completo
+(`POST`/`PUT`/`DELETE`), así que el hueco era solo de pantalla — y el estado vacío
+mandaba a `/firmas`, que es otro módulo y no ayuda.
+
+Ahora hay editor con: mensaje, cuenta (o todas), dominios exentos, "solo fuera de
+horario" y "es la predeterminada", más activar/desactivar, editar y borrar.
+
+De paso se arregló una incoherencia que hacía que el mensaje saliera mal:
+
+- **La app guardaba el mensaje sanitizado como HTML y el worker lo escapaba como
+  texto plano.** El worker arma el correo con `escapar(cuerpo)`, así que un
+  `<b>negrita</b>` escrito en la respuesta llegaba al destinatario **como texto
+  literal**. Ahora se guarda texto plano, con los saltos de línea normalizados
+  (un `textarea` en Windows manda CR+LF y el CR suelto se veía como un carácter
+  raro al final de cada línea) y un tope de 4000 caracteres.
+- El editor es un `textarea` y no el editor rico de las firmas, **a propósito**:
+  es la consecuencia de lo anterior, y una auto-respuesta es un aviso, no una
+  carta.
+- El mensaje ya **no se pinta en un iframe con `srcdoc`**: era la misma frontera
+  cid:/URL del resto de la app, vista del otro lado. Aquí lo que hay que proteger
+  es al administrador que lo ve, así que se muestra como texto con
+  `white-space: pre-wrap`.
+
+
 ### 2026-10-05 — Las migraciones eran inaplicables, y eso solo se vio contra la base real
 
 Las 4 migraciones (`0048`–`0051`) estaban escritas pero **nadie las había corrido
