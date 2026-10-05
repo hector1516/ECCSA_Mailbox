@@ -7,6 +7,37 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-06 — Se quita la barra inferior, para igualar a Admon y Field
+
+Mailbox tenía una barra de pestañas propia abajo. Admon y Field **no tienen
+ninguna**: navegan con las tarjetas del home (`.module-grid` / `.module-card`, que
+pinta el shell) y con el botón de vuelta de cada página. La barra duplicaba la
+navegación del shell y de paso tapaba contenido en pantallas cortas.
+
+Las clases `.bottom-nav` / `.nav-item` siguen llegando en el CSS del shell, sin
+componente que las use. Es exactamente igual que en Field y Admon, que tampoco
+tienen barra: solo el CSS quedó.
+
+### 2026-10-06 — `COPY` y `tar` FUSIONAN: la imagen acumulaba un bundle por deploy
+
+Descubierto desplegando: el build "funcionaba", pero en la imagen había **dos
+bundles `.js`**, y el viejo todavía traía la barra inferior recién quitada. El
+servido era el correcto, así que no se veía —pero la imagen crecía un bundle por
+deploy sin que nada los sirviera nunca.
+
+La causa es la misma en los dos sitios, y es la que hace perder tiempo:
+
+- **`COPY dist/ ./dist/`** fusiona directorios, no los reemplaza. Se agrega un
+  `RUN rm -rf dist` antes, para que el estado anterior no sobreviva a la capa.
+- **`tar xzf` sobre el directorio de build** fusiona igual, así que el contexto
+  de build arrastraba el `dist` viejo del deploy anterior. Hay que borrar el
+  directorio antes de extraer.
+
+Ninguno de los dos es un bug de código: los dos compilan bien y responden bien.
+Solo se ven mirando lo que hay DENTRO de la imagen, que es donde un build
+"correcto" se lleva un bug encima sin avisar.
+
+
 ### 2026-10-06 — Dos cosas que hacían imposible construir la imagen
 
 Ninguna se veía sin intentar el build, y por eso nadie lo había hecho.

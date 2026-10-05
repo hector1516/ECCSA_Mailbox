@@ -107,21 +107,13 @@
 		auth.logout();
 		navigate('/login', { replace: true });
 	}
-
-	// ── Pestañas inferiores ───────────────────────────────────────────────────
-	// Las define el shell (.bottom-nav / .nav-item); Mailbox usa las mismas que
-	// Field para que la app se sienta de la misma familia.
-	const TABS = [
-		{ icon: '🏠', label: 'Inicio', ruta: '/' },
-		{ icon: '✍️', label: 'Firmas', ruta: '/firmas' },
-		{ icon: '📐', label: 'Reglas', ruta: '/reglas' },
-		{ icon: '🔔', label: 'Alertas', ruta: '/notificaciones' }
-	];
-
-	function pestanaActiva(ruta) {
-		if (ruta === '/') return $path === '/' || $path === '';
-		return $path === ruta || $path.startsWith(ruta + '/');
-	}
+	/*
+	  SIN barra de pestañas inferior, a propósito. Admon y Field no tienen una:
+	  la navegación entre módulos se hace con las tarjetas del home
+	  (.module-grid / .module-card, que pinta el shell) y con el botón de
+	  vuelta de cada página. Una barra propia duplicaba la navegación del shell
+	  y de paso tapaba contenido en pantallas cortas.
+	*/
 </script>
 
 {#if !splashDone}
@@ -198,20 +190,6 @@
 		<div class="version-badge">Mailbox v{APP_VERSION}</div>
 	</div>
 
-	<!-- Barra de pestañas: solo con sesión, y solo en pantallas donde hay
-	     espacio. En una PC angosta estorba más de lo que ayuda. -->
-	{#if $auth.user}
-		<nav class="bottom-nav tab-bar">
-			{#each TABS as t}
-				<button class="nav-item" class:active={pestanaActiva(t.ruta)}
-				        onclick={() => navigate(t.ruta)}>
-					<span class="nav-icon">{t.icon}</span>
-					<span>{t.label}</span>
-				</button>
-			{/each}
-		</nav>
-	{/if}
-
 	<!-- Avisos (toasts). El contenedor y sus clases los define el shell. -->
 	<div class="toast-container">
 		{#each $toasts as t (t.id)}
@@ -229,14 +207,12 @@
 {/if}
 
 <style>
-	/* La barra de pestañas usa las clases del shell (.bottom-nav / .nav-item).
-	   Lo único propio es poder ocultarla en pantallas anchas, donde el menú de
-	   tarjetas de la home ya hace de navegación y una barra fija abajo estorba
-	   (además de quedar rarísima en un monitor). */
-	@media (min-width: 900px) {
-		.tab-bar { display: none; }
-	}
-
+	/*
+	  Aquí no hay reglas de la barra inferior porque ya no hay barra: se quitó
+	  para igualar a Admon y Field, que navegan solo con las tarjetas del home.
+	  Las clases .bottom-nav / .nav-item siguen llegando en el CSS del shell, sin
+	  componente que las use.
+	*/
 	/* En el login no hay navegación de fondo. */
 	.toast { cursor: pointer; }
 </style>

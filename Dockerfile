@@ -19,6 +19,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ ./api/
 
 # Frontend compilado por fuera (npm run build) y servido por FastAPI en "/".
+#
+# El `rm -rf` NO es opcional: `COPY` FUSIONA directorios, no los reemplaza. Sin
+# esto cada rebuild deja en la imagen el bundle anterior con su hash en el
+# nombre, y la imagen crece un bundle por deploy sin que nada los sirva nunca
+# (lo serve el `index.html`, que solo referencia el último). Se descubrió
+# desplegando: el build "funcionaba" y en la imagen había dos .js, el viejo con
+# la barra inferior que acabamos de quitar.
+RUN rm -rf dist
 COPY dist/ ./dist/
 
 # Versión del shell común (ECCSA-Shell): la lee GET /api/shell/state para el
