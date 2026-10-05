@@ -7,6 +7,48 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-06 — "Crear filtro" desde el mensaje abierto
+
+Botón nuevo en la fila de acciones del correo, junto a "Marcar como spam".
+
+Es el atajo de lo mismo que se puede hacer en la pestaña Reglas, con una
+diferencia: **el valor viene del mensaje que se está mirando**, así que no hay
+que escribirlo ni copiarlo. Todo queda editable porque casi siempre se quiere
+ajustar ("solo el dominio, no la dirección exacta").
+
+- **El campo por defecto es `DOMINIO`, no `FROM`**: casi todo filtro que uno crea
+  en la práctica es "todo lo que venga de este dominio", y `juan@empresa.com` no
+  captura `facturacion@empresa.com`.
+- Al cambiar de campo se rellena el valor con lo de ese mensaje. `BODY` se deja
+  vacío a propósito: el worker compara contra el `Extracto`, no contra el cuerpo
+  completo, y prefachar un valor que no es el que se compararía sería peor que
+  dejarlo en blanco.
+- **El vocabulario se valida contra el worker, no contra el front.** Campos
+  (`FROM`, `TO`, `SUBJECT`, `DOMINIO`, `BODY`), condiciones (`CONTIENE`, `IGUAL`,
+  `EMPIEZA`, `TERMINA`, `REGEX`) y acciones (`NO_HACER`, `MARCAR_LEIDO`,
+  `ARCHIVAR`, `ELIMINAR`, `SPAM`, `ETIQUETAR`). Un filtro mal formado es peor que
+  ningún filtro: se guarda, aparece en la lista con su texto, y nunca hace nada.
+- Si el filtro es idéntico a uno existente **no se duplica**: repetir el atajo
+  dos veces no debe dejar dos reglas corriendo en paralelo sobre cada correo.
+- El aviso dice explícitamente que el filtro es **para lo que llegue de aquí en
+  adelante**: el mensaje abierto no cambia, y si el usuario espera que se mueva
+  ahora mismo va a pensar que falló.
+
+### 2026-10-06 — La regla de "Marcar como spam" nunca iba a filtrar nada
+
+El botón creaba la regla con `Campo = 'REMITENTE'`, y `_valor_de_campo()` del
+worker solo reconoce `FROM`, `TO`, `SUBJECT`, `DOMINIO` y `BODY`: cualquier otro
+valor devuelve `""` y la regla nunca casa.
+
+Es el peor modo de falla posible — la regla se creaba, se veía en la lista de
+Reglas con su texto, y no filtraba NADA, con apariencia de estar funcionando. No
+lo detectó ningún test porque no había ninguno que comprobara que el valor del
+campo fuera uno que el worker entienda.
+
+Corregido a `FROM` / `SUBJECT`, y el endpoint de filtro valida el vocabulario
+completo para que no se repita.
+
+
 ### 2026-10-06 — Todos los correos salían sin cuerpo, por dos bugs apilados
 
 El aviso era "El contenido de este mensaje ya no está disponible". Eran **dos**

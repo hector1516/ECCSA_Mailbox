@@ -19,6 +19,8 @@
 	let mostrarMover = $state(false);
 	let destinos = $state([]);
 	let confirmar = $state('');
+	let mostrarFiltro = $state(false);
+	let filtro = $state(null);
 
 	/**
 	 * CSP dentro del iframe.
@@ -290,7 +292,7 @@
 		confirmar = '';
 		try {
 			await api.post(`/mailbox/mensajes/${msg.id}/operacion`, { operacion: 'delete' });
-			avisar('Mensaje eliminado.', 'ok');
+			avisar('Mensaje eliminado.', 'success');
 			navigate(`/cuenta/${msg.cuenta.id}`);
 		} catch (e) {
 			avisar(e.message || 'No se pudo eliminar', 'error');
@@ -305,7 +307,7 @@
 				r.regla_creada
 					? 'Marcado como spam. Los próximos correos de ese remitente también caerán en spam.'
 					: 'Marcado como spam. Ya existía una regla para ese remitente.',
-				'ok'
+				'success'
 			);
 			navigate(`/cuenta/${msg.cuenta.id}`);
 		} catch (e) {
@@ -313,11 +315,66 @@
 		}
 	}
 
+	/**
+	 * "Crear filtro" desde el mensaje abierto.
+	 *
+	 * Los valores vienen rellenos con lo que hay en ESTE correo, que es la
+	 * gracia del atajo: no hay que escribir ni copiar nada. Se deja todo
+	 * editable porque el 90% de los casos quiere ajustar el valor ("este remitente
+	 * Y este asunto", "solo el dominio, no la dirección exacta").
+	 *
+	 * El campo por defecto es DOMINIO y no FROM a propósito: casi todo filtro que
+	 * uno crea en la práctica es "todo lo que venga de este dominio", y
+	 * `juan@empresa.com` no captura `facturacion@empresa.com`. Está preseleccionado
+	 * pero se cambia en un clic.
+	 */
+	function abrirFiltro() {
+		const remitente = msg.remitente_email || '';
+		const dominio = remitente.includes('@') ? remitente.split('@').pop() : '';
+		filtro = {
+			campo: 'DOMINIO',
+			operador: 'CONTIENE',
+			valor: dominio,
+			accion: 'MARCAR_LEIDO',
+			etiqueta: ''
+		};
+		mostrarFiltro = true;
+	}
+
+	/** Cambia el campo y rellena el valor con lo de este mensaje. */
+	function cambiarCampoFiltro(campo) {
+		if (!filtro) return;
+		filtro.campo = campo;
+		const asunto = (msg.asunto || '').replace(/^((re|fwd|rv)\s*[:>]\s*)+/i, '').trim();
+		if (campo === 'FROM') filtro.valor = msg.remitente_email || '';
+		else if (campo === 'DOMINIO') filtro.valor = (msg.remitente_email || '').split('@').pop() || '';
+		else if (campo === 'SUBJECT') filtro.valor = asunto || msg.asunto || '';
+		else if (campo === 'TO') filtro.valor = (msg.para || '').slice(0, 120);
+		else filtro.valor = '';   // BODY: no se rellena, el extracto no es el cuerpo
+	}
+
+	async function guardarFiltro() {
+		if (!filtro || !filtro.valor.trim()) return;
+		try {
+			const r = await api.post(`/mailbox/mensajes/${msg.id}/filtro`, filtro);
+			mostrarFiltro = false;
+			avisar(
+				r.creada
+					? 'Filtro creado. Se aplica a los correos que lleguen de aquí en adelante.'
+					: (r.detalle || 'El filtro ya existía'),
+				r.creada ? 'success' : 'warning'
+			);
+			navigate(`/cuenta/${msg.cuenta.id}`);
+		} catch (e) {
+			avisar(e.message || 'No se pudo crear el filtro', 'error');
+		}
+	}
+
 	async function moverA(destino) {
 		mostrarMover = false;
 		try {
 			await api.post(`/mailbox/mensajes/${msg.id}/operacion`, { operacion: 'move', valor: destino });
-			avisar(`Movido a «${destino}». El worker lo aplica en su próximo ciclo.`, 'ok');
+			avisar(`Movido a «${destino}». El worker lo aplica en su próximo ciclo.`, 'success');
 			navigate(`/cuenta/${msg.cuenta.id}`);
 		} catch (e) {
 			avisar(e.message || 'No se pudo mover', 'error');
@@ -499,9 +556,85 @@
 			<button class="btn btn-secondary" onclick={() => (confirmar = 'spam')}>
 				🚫 Marcar como spam
 			</button>
+			<button class="btn btn-secondary" onclick={abrirFiltro}>
+				🎯 Crear filtro
+			</button>
 			<button class="btn btn-secondary mv-peligro" onclick={() => (confirmar = 'borrar')}>
 				🗑️ Eliminar
 			</button>
+		</div>
+	{/if}
+
+	<!-- ══ Crear filtro desde este mensaje ═══════════════════════════════
+	     Los valores vienen rellenos con lo de ESTE correo: es el atajo para no
+	     escribir ni copiar. Todo queda editable porque casi siempre se quiere
+	     ajustar (solo el dominio, otro campo, otra acción).
+	     -->
+	{#if mostrarFiltro && filtro && msg}
+		<div class="mv-overlay" role="dialog" aria-label="Crear filtro">
+			<div class="mv-modal mv-modal--ancha">
+				<h2 class="mv-modal-titulo">🎯 Crear filtro</h2>
+				<p class="mv-modal-nota">
+					Se aplica a los correos que lleguen <b>de aquí en adelante</b>.
+					Este mensaje no cambia: para moverlo ahora usa otra acción.
+				</p>
+
+				<div class="fl-fila">
+					<label class="fl-label" for="fl-campo">Cuando el</label>
+					<select id="fl-campo" class="input" value={filtro.campo}
+						onchange={(e) => cambiarCampoFiltro(e.currentTarget.value)}>
+						<option value="DOMINIO">Dominio del remitente</option>
+						<option value="FROM">Remitente</option>
+						<option value="SUBJECT">Asunto</option>
+						<option value="TO">Destinatario</option>
+						<option value="BODY">Contenido</option>
+					</select>
+				</div>
+
+				<div class="fl-fila">
+					<label class="fl-label" for="fl-op">sea</label>
+					<select id="fl-op" class="input" bind:value={filtro.operador}>
+						<option value="CONTIENE">contiene</option>
+						<option value="IGUAL">es exactamente</option>
+						<option value="EMPIEZA">empieza con</option>
+						<option value="TERMINA">termina con</option>
+						<option value="REGEX">expresión regular</option>
+					</select>
+				</div>
+
+				<div class="fl-fila">
+					<label class="fl-label" for="fl-valor">este valor</label>
+					<input id="fl-valor" class="input" bind:value={filtro.valor} maxlength="500"
+						placeholder="ej. newsletter@empresa.com" autocapitalize="none" />
+				</div>
+
+				<div class="fl-fila">
+					<label class="fl-label" for="fl-accion">entonces</label>
+					<select id="fl-accion" class="input" bind:value={filtro.accion}>
+						<option value="MARCAR_LEIDO">👁️ Marcar como leído</option>
+						<option value="SPAM">🚫 Marcar como spam</option>
+						<option value="ARCHIVAR">🗄️ Archivar</option>
+						<option value="ELIMINAR">🗑️ Mover a papelera</option>
+						<option value="ETIQUETAR">🏷️ Etiquetar</option>
+						<option value="NO_HACER">⏸️ No hacer nada (documentada)</option>
+					</select>
+				</div>
+
+				{#if filtro.accion === 'ETIQUETAR'}
+					<div class="fl-fila">
+						<label class="fl-label" for="fl-etiq">con la etiqueta</label>
+						<input id="fl-etiq" class="input" bind:value={filtro.etiqueta} maxlength="60"
+							placeholder="ej. Newsletters" />
+					</div>
+				{/if}
+
+				<div class="mv-modal-acciones">
+					<button class="btn btn-secondary" onclick={() => (mostrarFiltro = false)}>Cancelar</button>
+					<button class="btn btn-primary" onclick={guardarFiltro} disabled={!filtro.valor.trim()}>
+						Crear filtro
+					</button>
+				</div>
+			</div>
 		</div>
 	{/if}
 
@@ -651,7 +784,23 @@
 	.mv-modal-acciones .btn { flex: 1; }
 	.mv-peligro { color: var(--color-danger); border-color: rgba(239, 68, 68, 0.4); }
 	.mv-peligro:hover { background: rgba(239, 68, 68, 0.12) !important; }
+	.mv-modal--ancha { width: min(32rem, 100%); }
 	.mv-modal-cerrar { width: 100%; }
+
+	/* ── Filtro ─────────────────────────────────────────────────────────── */
+	.fl-fila {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		margin-bottom: 0.6rem;
+		flex-wrap: wrap;
+	}
+	.fl-label {
+		flex: 0 0 7.2rem;
+		font-size: 0.8rem;
+		color: var(--color-text-muted);
+	}
+	.fl-fila .input { flex: 1 1 12rem; min-width: 0; }
 
 	.mv-adjuntos {
 		background: var(--color-surface);

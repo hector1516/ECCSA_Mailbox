@@ -2618,8 +2618,18 @@ def marcar_spam(mensaje_id: int, body: SpamReq, usuario: dict = Depends(require_
     # "todo lo que venga de aquí es spam". El asunto de fallback cubre los
     # remitentes为空/vacios (alertas automáticas sin From), donde lo único que
     # identifica al envío es la línea de asunto.
-    regla = {"campo": "REMITENTE", "valor": remitente} if remitente \
-            else {"campo": "ASUNTO", "valor": asunto}
+    #
+    # `FROM` y `SUBJECT`, NO "remitente"/"asunto".
+    #
+    # `_valor_de_campo()` del worker solo reconoce FROM, TO, SUBJECT, DOMINIO y
+    # BODY; cualquier otra cosa devuelve "" y la regla nunca casa. Con
+    # "REMITENTE" la regla se creaba, se veía en la lista de Reglas y no
+    # filtraba NADA: el peor resultado posible, porque parece funcionando.
+    #
+    # Se normaliza en mayúsculas para que el valor sea el mismo que acepta el
+    # worker y el mismo que muestra la página de Reglas.
+    regla = {"campo": "FROM", "valor": remitente} if remitente \
+            else {"campo": "SUBJECT", "valor": asunto}
 
     ya_existe = _una(
         "SELECT Id FROM HUB_MailboxReglas WHERE IdUsuario = %s AND Campo = %s "
@@ -2659,6 +2669,91 @@ def _carpeta_spam(cuenta_id: int) -> str:
     aplica el movimiento.
     """
     return "Spam"
+
+
+class FiltroReq(BaseModel):
+    campo: str = "FROM"
+    operador: str = "CONTIENE"
+    valor: str = ""
+    accion: str = "MARCAR_LEIDO"
+    etiqueta: str = ""
+    prioridad: int = 100
+
+
+# El vocabulario NO es libre: son exactamente los valores que `_valor_de_campo()`
+# y `coincide()` del worker entienden. Una regla con un campo inventado se crea,
+# se ve en la lista y no filtra nada — el peor resultado, porque parece
+# funcionando. Por eso se valida acá y no en el front.
+_CAMPOS_FILTRO = {"FROM", "TO", "SUBJECT", "DOMINIO", "BODY"}
+_OPERADORES_FILTRO = {"CONTIENE", "IGUAL", "EMPIEZA", "TERMINA", "REGEX"}
+_ACCIONES_FILTRO = {"NO_HACER", "MARCAR_LEIDO", "ARCHIVAR", "ELIMINAR", "SPAM", "ETIQUETAR"}
+
+
+@app.post("/api/mailbox/mensajes/{mensaje_id}/filtro")
+def crear_filtro(mensaje_id: int, body: FiltroReq, usuario: dict = Depends(require_mailbox)):
+    """
+    Crea una regla a partir del mensaje abierto, con los valores ya rellenados.
+
+    El atajo de "crear filtro" desde un correo es la forma rápida de lo mismo
+    que se puede hacer en la pestaña Reglas, con una diferencia: el valor viene
+    del mensaje que se está mirando, así que no hay que escribirlo ni copiarlo.
+
+    Igual se valida TODO contra el vocabulario del worker. Un filtro mal formado
+    es peor que ningún filtro: se guarda, aparece en la lista con su texto, y
+    nunca hace nada.
+    """
+    m = _mensaje_del_usuario(mensaje_id, usuario)
+    if not m:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+
+    campo = (body.campo or "").upper().strip()
+    operador = (body.operador or "").upper().strip()
+    accion = (body.accion or "").upper().strip()
+    valor = (body.valor or "").strip()[:500]
+
+    if campo not in _CAMPOS_FILTRO:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Campo inválido. Usa uno de: {', '.join(sorted(_CAMPOS_FILTRO))}",
+        )
+    if operador not in _OPERADORES_FILTRO:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Condición inválida. Usa una de: {', '.join(sorted(_OPERADORES_FILTRO))}",
+        )
+    if accion not in _ACCIONES_FILTRO:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Acción inválida. Usa una de: {', '.join(sorted(_ACCIONES_FILTRO))}",
+        )
+    if not valor:
+        raise HTTPException(status_code=400, detail="El filtro necesita un valor")
+    if accion == "ETIQUETAR" and not (body.etiqueta or "").strip():
+        raise HTTPException(status_code=400, detail="La acción Etiquetar necesita una etiqueta")
+    # El mismo tope del worker: una regex más larga que esto no se ejecuta.
+    if operador == "REGEX" and len(valor) > 200:
+        raise HTTPException(status_code=400, detail="La expresión regular es demasiado larga")
+
+    # Si el filtro es exactamente una regla que ya existe, no se duplica: el
+    # usuario que repite el atajo dos veces no quiere dos reglas que corran en
+    # paralelo sobre cada correo.
+    ya_existe = _una(
+        "SELECT Id FROM HUB_MailboxReglas WHERE IdUsuario = %s AND Campo = %s "
+        "AND Operador = %s AND Valor = %s AND Activa = 1",
+        (usuario["Id"], campo, operador, valor),
+    )
+    if ya_existe:
+        return {"ok": True, "creada": False, "id": ya_existe["Id"],
+                "detalle": "Ya tienes un filtro idéntico, no se creó otro"}
+
+    _ejecuta(
+        "INSERT INTO HUB_MailboxReglas (IdUsuario, Prioridad, Campo, Operador, Valor, "
+        "Accion, Etiqueta, Activa, Creado) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, 1, GETDATE())",
+        (usuario["Id"], max(1, min(int(body.prioridad or 100), 9999)),
+         campo, operador, valor, accion, (body.etiqueta or "").strip()[:60] or None),
+    )
+    return {"ok": True, "creada": True}
 
 
 @app.get("/api/mailbox/reglas")

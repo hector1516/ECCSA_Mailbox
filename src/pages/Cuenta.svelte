@@ -109,7 +109,7 @@
 			await api.post(`/mailbox/cuentas/${cuentaId}/carpetas`, { nombre });
 			mostrarNueva = false;
 			nombreNueva = '';
-			avisar('Carpeta creada. Aparece en cuanto el worker la confirme.', 'ok');
+			avisar('Carpeta creada. Aparece en cuanto el worker la confirme.', 'success');
 			await cargarCarpetas();
 		} catch (e) {
 			avisar(e.message || 'No se pudo crear la carpeta', 'error');
