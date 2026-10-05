@@ -752,10 +752,25 @@ _PERMITIDAS = {
 # Etiquetas cuyo CONTENIDO se descarta entero, no solo la etiqueta: si se
 # sacara `<script>` dejando su texto, el texto del script se vería en el correo.
 # Y hay que revisar el texto buscando un ">" sin "<" que reabra una etiqueta.
+# Elementos que se descarta TAMBIÉN su contenido, porque el contenido es código.
 _DESCARTAR_CON_CONTENIDO = {"script", "style", "iframe", "object", "embed",
-                           "form", "input", "button", "select", "textarea",
-                           "link", "meta", "base", "svg", "math", "noscript",
-                           "applet", "frame", "frameset", "xml"}
+                           "form", "button", "select", "textarea",
+                           "svg", "math", "noscript", "applet", "frameset", "xml"}
+
+#
+# ELEMENTOS VACÍOS: se descartan solos, NUNCA entran en modo "descartando".
+#
+# Estos no tienen etiqueta de cierre, por HTML. Si se metieran en el conjunto de
+# arriba, el contador `_descartando` se ponía a 1 con `<meta>` y NUNCA volvía a
+# 0: no hay `</meta>` que lo baje. A partir de ahí se perdía todo el resto del
+# documento, y como el worker envuelve cada cuerpo con
+# `<html><head><meta charset="utf-8"></head><body>…`, TODOS los correos se
+# sanearían a cadena vacía. El usuario veía "el contenido no está disponible"
+# (o, una vez arreglado el path, un cuerpo en blanco) sin ningún error.
+#
+# No es un caso raro: `<meta>` está en la cabecera de prácticamente todo correo
+# HTML que llega de Outlook o de un cliente de escritorio.
+_VACIOS = {"meta", "base", "link", "input", "embed", "frame"}
 
 _ATRIBUTOS = {
     "*": {"style", "class", "align", "valign", "dir", "lang", "title"},
@@ -819,6 +834,11 @@ class _Sanitizador(HTMLParser):
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
         if self._descartando:
+            return
+        if tag in _VACIOS:
+            # Se suelta sin tocar `_descartando`: no hay etiqueta de cierre que
+            # lo vuelva a bajar, así que ponerlo a 1 se comería el documento
+            # entero. Ver la nota de _VACIOS.
             return
         if tag in _DESCARTAR_CON_CONTENIDO:
             self._descartando = 1
@@ -1822,8 +1842,21 @@ def ver_mensaje(mensaje_id: int, usuario: dict = Depends(require_mailbox)):
     }
 
 
-def _leer_cuerpo(clave: str) -> Optional[str]:
+def _leer_cuerpo(clave: str, cuenta_id: int = 0) -> Optional[str]:
     """Lee el cuerpo del volumen y lo descomprime.
+
+    EL TRABAJO DE ARTE ESTÁ EN SUBCARPETA POR CUENTA: `cuerpos/<cuenta>/<clave>.gz`.
+
+    Buscaba `cuerpos/<clave>` plano, así que la lectura SIEMPRE fallaba y todos
+    los correos abrían con "El contenido de este mensaje ya no está disponible".
+    Los 434 archivos estaban escritos y en su sitio; 430 de ellos nunca se
+    leiaron. Con `CuerpoGuardado = 1` en la base, el mensaje parecía sano.
+
+    El subdirectorio existe para no meter miles de archivos en un solo
+    directorio: es lo que hace `almacen.ruta_cuerpo()` en el worker. Se prueban
+    las dos formas (con y sin subcarpeta) porque un despliegue viejo puede
+    tenerlos planos, y porque un cuerpo ya guardado antes de este arreglo tiene
+    que seguir leyéndose.
 
     El gzip es del worker; acá solo se descomprime. Un cuerpo corrupto devuelve
     None en vez de una excepción 500: es preferible ver "no disponible" que ver
@@ -1831,14 +1864,40 @@ def _leer_cuerpo(clave: str) -> Optional[str]:
     """
     import gzip
 
-    ruta = os.path.join(_CUERPO_BASE, clave)
-    # Defensa contra path traversal: la clave viene de la base, pero si alguien
-    # lograra escribir "../../etc/passwd" ahí, esto lo evita igual.
+    # El orden importa: primero la ruta que escribe el worker hoy, después el
+    # plano como compatibilidad.
+    candidatas = []
+    if cuenta_id:
+        candidatas.append(os.path.join(_CUERPO_BASE, str(int(cuenta_id)), clave + ".gz"))
+        candidatas.append(os.path.join(_CUERPO_BASE, str(int(cuenta_id)), clave))
+    candidatas.append(os.path.join(_CUERPO_BASE, clave + ".gz"))
+    candidatas.append(os.path.join(_CUERPO_BASE, clave))
+
+    html = None
+    for ruta in candidatas:
+        leido = _leer_cuerpo_de(ruta)
+        if leido is not None:
+            return leido
+    return html
+
+def _leer_cuerpo_de(ruta: str) -> Optional[str]:
+    """Lee y descomprime UN archivo de cuerpo, o None si no se puede.
+
+    La defensa contra path traversal se hace con `os.path.commonpath` y no con
+    `startswith` sobre la ruta real: `startswith` deja pasar `/data/mailbox/cuerpos
+    /../secreto` recortado a `/data/mailbox/cuerpos_secreto`… que no existe, pero
+    también `/data/mailbox/cuerposX`, que sí podría existir y cuyo nombre empieza
+    igual. `commonpath` compara por componentes de ruta, no por caracteres.
+    """
+    import gzip
+
+    base = os.path.realpath(_CUERPO_BASE)
     try:
         real = os.path.realpath(ruta)
-        if not real.startswith(os.path.realpath(_CUERPO_BASE)):
+        # Una clave con ".." o una barra se sale del volumen: se descarta.
+        if os.path.commonpath([real, base]) != base:
             return None
-    except OSError:
+    except (OSError, ValueError):
         return None
 
     try:
@@ -1877,7 +1936,7 @@ def cuerpo_mensaje(mensaje_id: int, usuario: dict = Depends(require_mailbox)):
             )
         raise HTTPException(status_code=404, detail="El cuerpo todavía no se ha descargado")
 
-    html = _leer_cuerpo(m["ClaveCuerpo"])
+    html = _leer_cuerpo(m["ClaveCuerpo"], m["IdCuenta"])
     if html is None:
         raise HTTPException(status_code=410, detail="El contenido de este mensaje ya no está disponible")
 
@@ -2511,6 +2570,95 @@ def _regla_json(r: dict) -> dict:
         "activa": bool(r.get("Activa")),
         "veces_ejecutada": r.get("VecesEjecutada"),
     }
+
+
+class SpamReq(BaseModel):
+    # Con remitente=vacío el botón usa el remitente del mensaje. Se permite
+    # mandarlo explícito para reusar el botón desde un remitente ya conocido.
+    remitente: str = ""
+    asunto: str = ""
+
+
+@app.post("/api/mailbox/mensajes/{mensaje_id}/spam")
+def marcar_spam(mensaje_id: int, body: SpamReq, usuario: dict = Depends(require_mailbox)):
+    """
+    "Marcar como spam" hace DOS cosas, y por eso no es un simple `move`:
+
+    1. Crea una **regla** para que los próximos correos de ese remitente (o con
+       ese asunto) caigan solos en la carpeta de spam. Sin la regla, marcar uno a
+       uno es trabajo infinito: el remitente vuelve mañana con otro correo.
+    2. Encola el movimiento de ESTE mensaje, que es lo que el usuario está
+       mirando.
+
+    Por qué una regla y no un filtro del servidor: la carpeta de spam del
+    proveedor (Gmail, Hostinger) no se puede escribir por IMAP, y la cuenta de
+    correo es del usuario, no nuestra. Lo único que se puede hacer desde la
+    cuenta es MOVER el mensaje a la carpeta de spam del propio buzón, y para
+    eso está la regla.
+
+    El movimiento real lo aplica el worker con IMAP COPY. Si no se puede
+    resolver la carpeta de spam del proveedor, la regla no se aplica y el error
+    queda en el log del worker: es preferible a inventar una carpeta que el
+    usuario no ve en su cliente.
+    """
+    m = _mensaje_del_usuario(mensaje_id, usuario)
+    if not m:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+
+    remitente = (body.remitente or "").strip()[:200] or (m.get("RemitenteEmail") or "").strip()
+    asunto = (body.asunto or "").strip()[:200] or (m.get("Asunto") or "").strip()
+
+    if not remitente and not asunto:
+        raise HTTPException(
+            status_code=400,
+            detail="El mensaje no tiene remitente ni asunto: no hay nada con lo que armar la regla",
+        )
+
+    # La regla se ata al REMITENTE, no al mensaje. Es lo que el usuario quiere:
+    # "todo lo que venga de aquí es spam". El asunto de fallback cubre los
+    # remitentes为空/vacios (alertas automáticas sin From), donde lo único que
+    # identifica al envío es la línea de asunto.
+    regla = {"campo": "REMITENTE", "valor": remitente} if remitente \
+            else {"campo": "ASUNTO", "valor": asunto}
+
+    ya_existe = _una(
+        "SELECT Id FROM HUB_MailboxReglas WHERE IdUsuario = %s AND Campo = %s "
+        "AND Valor = %s AND Activa = 1",
+        (usuario["Id"], regla["campo"], regla["valor"]),
+    )
+    regla_creada = False
+    if not ya_existe:
+        _ejecuta(
+            "INSERT INTO HUB_MailboxReglas (IdUsuario, Prioridad, Campo, Operador, Valor, "
+            "Accion, Etiqueta, Activa, Creado) "
+            "VALUES (%s, 10, %s, 'CONTIENE', %s, 'SPAM', 'Spam', 1, GETDATE())",
+            (usuario["Id"], regla["campo"], regla["valor"]),
+        )
+        regla_creada = True
+
+    # Y este mensaje se mueve ahora, sin esperar a que la regla lo alcance en el
+    # próximo ciclo: el usuario lo está mirando y quiere verlo irse.
+    _ejecuta(
+        "INSERT INTO HUB_MailboxColaOperaciones "
+        "(IdCuenta, IdUsuario, IdMensaje, Operacion, Valor, Estado, Creado) "
+        "VALUES (%s, %s, %s, 'move', %s, 'PENDIENTE', GETDATE())",
+        (m["IdCuenta"], usuario["Id"], mensaje_id, _carpeta_spam(m["IdCuenta"])),
+    )
+
+    return {"ok": True, "regla_creada": regla_creada, "remitente": remitente}
+
+
+def _carpeta_spam(cuenta_id: int) -> str:
+    """
+    Nombre con el que se registra la carpeta de spam en el índice.
+
+    NO se resuelve el nombre real del proveedor acá: eso lo hace el worker, que
+    es el único que puede ver las carpetas del buzón. Acá solo se registra un
+    nombre legible para que la fila quede ordenada y el usuario la reconozca
+    como spam; si el proveedor usa otro nombre, el worker lo corrige cuando
+    aplica el movimiento.
+    """
+    return "Spam"
 
 
 @app.get("/api/mailbox/reglas")

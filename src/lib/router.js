@@ -9,9 +9,23 @@ export const path = writable(
 
 export function navigate(to, { replace = false } = {}) {
 	if (typeof window === 'undefined') return;
+	// El store guarda la RUTA, no la URL completa. Sin este split, basta con
+	// navegar a `/redactar?cuenta=1` para que `$path` valga
+	// `/redactar?cuenta=1`, que NO es igual a `/redactar`, y el `{#if $path ===
+	// '/redactar'}` de App.svelte no entre: la pantalla cae al `{:else}` final,
+	// que es el Home.
+	//
+	// Pasó: los botones Responder, Responder a todos y Reenviar aterrizaban en
+	// el menú principal. No era un problema de las reglas de reenvío: era que
+	// `navigate()` metía la query en la ruta y la comparación del router no
+	// podía dar nunca.
+	//
+	// Los query params siguen disponibles donde hacen falta: se leen de
+	// `window.location.search`, no del store.
+	const ruta = String(to).split('?')[0].split('#')[0];
 	if (replace) history.replaceState({}, '', to);
 	else history.pushState({}, '', to);
-	path.set(to);
+	path.set(ruta);
 	window.scrollTo(0, 0);
 }
 

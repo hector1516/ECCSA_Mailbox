@@ -60,6 +60,19 @@ VALIDOS = [
     ("style_bueno", '<div style="color:#FF6B00;font-weight:bold">x</div>', ["color:#FF6B00"]),
     ("tabla_ancho", '<table width="100%" cellpadding="0"><tr><td>x</td></tr></table>', ['width="100%"', 'cellpadding="0"']),
     ("lista",       "<ul><li>uno</li><li>dos</li></ul>",          ["<ul>", "<li>"]),
+    # ── Elementos VACÍOS que se descartan: el resto del documento debe sobrevivir.
+    # Estos tres son la regresión del bug que dejó TODOS los correos en blanco.
+    # El envoltorio que escribe el worker es exactamente el primero.
+    ("meta_charset",
+     '<html><head><meta charset="utf-8"></head><body><pre>contenido</pre></body></html>',
+     ["contenido", "<pre>"]),
+    ("meta_refresh_no_todo",
+     '<html><head><meta http-equiv="refresh" content="0;url=evil"></head><body><p>salvado</p></body></html>',
+     ["salvado", "<p>"]),
+    ("base_void",       '<p>uno</p><base href="//evil"><p>dos</p>', ["uno", "dos"]),
+    ("input_void",      '<input value="x"><p>visible</p>',           ["visible"]),
+    ("link_void",       '<link rel="stylesheet" href="//evil"><p>ok</p>', ["ok"]),
+    ("varios_voids",    '<meta charset="utf-8"><base href="//e"><p>final</p>', ["final"]),
 ]
 
 

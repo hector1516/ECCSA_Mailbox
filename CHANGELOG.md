@@ -7,6 +7,86 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-06 — Todos los correos salían sin cuerpo, por dos bugs apilados
+
+El aviso era "El contenido de este mensaje ya no está disponible". Eran **dos**
+bugs encimados, y con el primero arreglado seguía sin verse nada:
+
+**1. La app buscaba el cuerpo en el directorio equivocado.** El worker escribe
+en `cuerpos/<cuenta>/<clave>.gz` y la app leía `cuerpos/<clave>` plano. El
+`404`/`410` salía siempre: los 434 archivos estaban escritos y en su sitio, 430
+nunca se leyeron. Con `CuerpoGuardado = 1` en la base, todo parecía sano.
+
+De paso, la defensa contra path traversal pasa de `startswith` a
+`os.path.commonpath`: comparar por caracteres deja pasar un directorio hermano
+que se llame como el prefijo (`cuerpos_secreto` empieza como `cuerpos`).
+`commonpath` compara por componentes.
+
+**2. El sanitizador se comía el documento entero.** `meta`, `base`, `link`,
+`input`, `embed` y `frame` estaban en el conjunto de "descartar **con**
+contenido", pero son **elementos vacíos**: no tienen etiqueta de cierre. El
+contador `_descartando` se ponía a 1 con `<meta>` y **nunca volvía a 0**, así
+que todo lo que venía después se perdía.
+
+Y como el worker envuelve cada cuerpo con
+`<html><head><meta charset="utf-8"></head><body>…`, **los 434 correos se
+saneaban a cadena vacía**. No es un caso raro: `<meta>` está en la cabecera de
+prácticamente todo correo HTML de un cliente de escritorio.
+
+El test de `meta refresh` existente **pasaba** mientras pasaba esto: solo
+comprobaba que `<meta` no apareciera en la salida, y una salida vacía cumple
+eso. Se agregaron 6 casos que exigen que el resto del documento **sobreviva**
+(`meta_charset`, `meta_refresh_no_todo`, `base_void`, `input_void`,
+`link_void`, `varios_voids`). La suite del sanitizador pasó de 35 a 41 casos.
+
+Los dos bugs juntos significaban que ningún correo había sido legible desde el
+primer despliegue.
+
+### 2026-10-06 — Responder / Responder a todos / Reenviar aterrizaban en el menú
+
+`navigate('/redactar?cuenta=1')` guardaba **la URL con query** en el store de
+ruta, así que `$path` valía `'/redactar?cuenta=1'`, que no es igual a
+`'/redactar'`. El `{#if $path === '/redactar'}` no entraba y la pantalla caía al
+`{:else}` final, que es el Home.
+
+No era un problema de las reglas de reenvío: `navigate()` metía la query en la
+ruta y la comparación no podía dar nunca. El store guarda la ruta, no la URL;
+los query params se leen de `window.location.search`, que es donde ya se leían.
+
+### 2026-10-06 — Marcar como spam (crea la regla) y Eliminar (con confirmación)
+
+- **"Marcar como spam" hace dos cosas**: crea una **regla** para que los
+  próximos correos de ese remitente caigan solos en spam, y encola el
+  movimiento de este mensaje. Marcar uno por uno es trabajo infinito: el
+  remitente vuelve mañana con otro correo.
+
+  Se ata la regla al **remitente**, no al mensaje. El asunto queda de fallback
+  para remitentes vacíos (alertas automáticas sin `From`), donde lo único que
+  identifica al envío es la línea de asunto.
+
+  Por qué una regla y no un filtro del servidor: la carpeta de spam del
+  proveedor no se puede escribir por IMAP, y la cuenta es del usuario, no
+  nuestra. Lo único que se puede hacer desde la cuenta es **mover** el mensaje
+  a la carpeta de spam del propio buzón.
+
+- El worker gana la acción **`SPAM`**. La carpeta se resuelve una vez por ciclo
+  con candidatos en español e inglés (`spam`, `junk`, `correo no deseado`…),
+  porque el buzón de Hostinger está en español y el de Gmail en inglés. **No
+  cae a un nombre inventado**: una carpeta fantasma que el usuario no ve en su
+  cliente hace desaparecer el correo de ECCSA sin explicación, y es peor que
+  que la regla no se aplique.
+
+- **"Eliminar" pide confirmación.** El `delete` de antes movía a la papelera sin
+  preguntar, a un botón pegado al de "Responder" en la fila de acciones: un
+  toque de más borraba un correo que no se recupera, porque la retención se lo
+  lleva. Las dos únicas acciones irreversibles de la pantalla son las que
+  preguntan.
+
+- El diálogo de spam **explica que se crea una regla**, no solo que se mueve el
+  mensaje: si no, la próxima vez que llegue algo de ese remitente el usuario lo
+  verá desaparecer sin saber por qué.
+
+
 ### 2026-10-06 — Los correos no se veían: el front leía el sobre, no la lista
 
 El endpoint de mensajes devuelve un sobre paginado

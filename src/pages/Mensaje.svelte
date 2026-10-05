@@ -18,6 +18,7 @@
 	let descargando = $state(0);
 	let mostrarMover = $state(false);
 	let destinos = $state([]);
+	let confirmar = $state('');
 
 	/**
 	 * CSP dentro del iframe.
@@ -271,6 +272,47 @@
 			.catch(() => (destinos = []));
 	}
 
+	/**
+	 * Eliminar y spam pasan por CONFIRMACIÓN, y no es desconfianza del usuario:
+	 * son las dos únicas acciones de esta pantalla que no se pueden deshacer.
+	 *
+	 * El `operacion('delete')` de antes movía el mensaje a la papelera sin
+	 * preguntar, a un botón de la fila de acciones, a un dedo pegado al de
+	 * "Responder". Un toque de más borraba un correo que no se puede recuperar
+	 * porque la fila se marca `Eliminado=1` y la retención se la lleva.
+	 *
+	 * Spam además explica qué va a hacer a futuro, porque no es solo sobre este
+	 * correo: crea una regla. Si el usuario cree que solo mueve el mensaje, la
+	 * próxima vez que le llegue algo de ese remitente lo vera desaparecer sin
+	 * saber por qué.
+	 */
+	async function confirmarEliminar() {
+		confirmar = '';
+		try {
+			await api.post(`/mailbox/mensajes/${msg.id}/operacion`, { operacion: 'delete' });
+			avisar('Mensaje eliminado.', 'ok');
+			navigate(`/cuenta/${msg.cuenta.id}`);
+		} catch (e) {
+			avisar(e.message || 'No se pudo eliminar', 'error');
+		}
+	}
+
+	async function marcarSpam() {
+		confirmar = '';
+		try {
+			const r = await api.post(`/mailbox/mensajes/${msg.id}/spam`, {});
+			avisar(
+				r.regla_creada
+					? 'Marcado como spam. Los próximos correos de ese remitente también caerán en spam.'
+					: 'Marcado como spam. Ya existía una regla para ese remitente.',
+				'ok'
+			);
+			navigate(`/cuenta/${msg.cuenta.id}`);
+		} catch (e) {
+			avisar(e.message || 'No se pudo marcar como spam', 'error');
+		}
+	}
+
 	async function moverA(destino) {
 		mostrarMover = false;
 		try {
@@ -454,9 +496,44 @@
 			<button class="btn btn-secondary" onclick={abrirMover}>
 				📁 Mover a carpeta
 			</button>
-			<button class="btn btn-secondary" onclick={() => operacion('delete')}>
-				🗑️ Borrar
+			<button class="btn btn-secondary" onclick={() => (confirmar = 'spam')}>
+				🚫 Marcar como spam
 			</button>
+			<button class="btn btn-secondary mv-peligro" onclick={() => (confirmar = 'borrar')}>
+				🗑️ Eliminar
+			</button>
+		</div>
+	{/if}
+
+	<!-- Confirmación de las dos acciones irreversibles. -->
+	{#if confirmar && msg}
+		<div class="mv-overlay" role="dialog" aria-label="Confirmar">
+			<div class="mv-modal">
+				{#if confirmar === 'spam'}
+					<h2 class="mv-modal-titulo">🚫 ¿Marcar como spam?</h2>
+					<p class="mv-modal-nota">
+						Este correo se va a la carpeta de spam <b>y se crea una regla</b>:
+						los próximos correos de
+						<b>{msg.remitente_email || msg.remitente_nombre || 'este remitente'}</b>
+						también caerán en spam solos. La regla se puede borrar en Reglas.
+					</p>
+					<div class="mv-modal-acciones">
+						<button class="btn btn-secondary" onclick={() => (confirmar = '')}>Cancelar</button>
+						<button class="btn btn-primary" onclick={marcarSpam}>Sí, marcar como spam</button>
+					</div>
+				{:else}
+					<h2 class="mv-modal-titulo">🗑️ ¿Eliminar el mensaje?</h2>
+					<p class="mv-modal-nota">
+						Se mueve a la papelera del buzón <b>{msg.cuenta.email || ''}</b>.
+						Si lo borras de ahí en tu cliente de correo, no hay forma de
+						recuperarlo desde aquí.
+					</p>
+					<div class="mv-modal-acciones">
+						<button class="btn btn-secondary" onclick={() => (confirmar = '')}>Cancelar</button>
+						<button class="btn btn-danger mv-peligro" onclick={confirmarEliminar}>Sí, eliminar</button>
+					</div>
+				{/if}
+			</div>
 		</div>
 	{/if}
 
@@ -570,6 +647,10 @@
 	}
 	.mv-modal-item:hover { background: rgba(255, 107, 0, 0.1); }
 	.mv-modal-count { margin-left: auto; font-size: 0.75rem; color: var(--color-text-muted); }
+	.mv-modal-acciones { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+	.mv-modal-acciones .btn { flex: 1; }
+	.mv-peligro { color: var(--color-danger); border-color: rgba(239, 68, 68, 0.4); }
+	.mv-peligro:hover { background: rgba(239, 68, 68, 0.12) !important; }
 	.mv-modal-cerrar { width: 100%; }
 
 	.mv-adjuntos {
