@@ -103,12 +103,33 @@ GO
 
 -- Una dirección no puede estar dada de alta dos veces: el worker sincroniza por
 -- Id y dos filas con el mismo buzón descargarían el correo dos veces.
+--
+-- El índice va sobre la columna CRUDA, no sobre `LTRIM(RTRIM(Email))`. SQL Server
+-- no admite una expresión de función en la clave de un índice: solo columnas
+-- simples o columnas calculadas persistidas. Escribirlo con las funciones da
+-- `Incorrect syntax near '('`, que es como se descubrió.
+--
+-- Para que el índice siga siendo correcto, la limpieza de espacios se exige con
+-- un CHECK, que SÍ admite funciones. Sin él, "juan@x.com" y "juan@x.com "
+-- pasarían el índice como dos cuentas distintas, que es justo lo que este
+-- índice evita.
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_HUB_MailboxCuentas_Email'
                AND object_id = OBJECT_ID('dbo.HUB_MailboxCuentas'))
 BEGIN
     CREATE UNIQUE INDEX UX_HUB_MailboxCuentas_Email
-        ON dbo.HUB_MailboxCuentas (LTRIM(RTRIM(Email)));
+        ON dbo.HUB_MailboxCuentas (Email);
     PRINT 'indice unico de Email creado';
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints
+               WHERE name = 'CK_MailboxCuentas_Email_SinEspacios'
+                 AND parent_object_id = OBJECT_ID('dbo.HUB_MailboxCuentas'))
+BEGIN
+    ALTER TABLE dbo.HUB_MailboxCuentas
+        ADD CONSTRAINT CK_MailboxCuentas_Email_SinEspacios
+        CHECK (Email = LTRIM(RTRIM(Email)));
+    PRINT 'constraint de Email sin espacios agregada';
 END
 GO
 

@@ -7,6 +7,61 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-05 — Las migraciones eran inaplicables, y eso solo se vio contra la base real
+
+Las 4 migraciones (`0048`–`0051`) estaban escritas pero **nadie las había corrido
+nunca**: no había runner. La consecuencia no era visible — el contenedor arrancaba, el
+login funcionaba, y la primera consulta a `HUB_MailboxCuentas` contestaba
+"invalid object name". Se agrega `apply_migrations.py` y, al correrlo de verdad,
+salieron dos cosas:
+
+- **`CREATE UNIQUE INDEX ... ON t (LTRIM(RTRIM(Email)))` es un error de sintaxis.**
+  SQL Server no admite una expresión de función en la clave de un índice: solo
+  columnas simples o columnas calculadas **persistidas**. El índice va ahora
+  sobre la columna cruda, y para que siga siendo correcto se agrega un `CHECK
+  (Email = LTRIM(RTRIM(Email)))`, que sí admite funciones. Sin ese `CHECK`,
+  `"juan@x.com"` y `"juan@x.com "` pasarían como dos cuentas distintas, que es
+  justo lo que el índice único evita.
+- **`schema_migrations` es una tabla COMPARTIDA con HUB/Admon y su esquema no es
+  el que este runner asumía.** Es `id / version / created_at / applied_by`, y el
+  primer runner inventaba una columna `Archivo` que no existe. Se adaptó a leer y
+  escribir la tabla real, **sin alterarla**: cada app llevando su propio historial
+  haría que se pierda el único registro de qué se aplicó y qué no. De paso,
+  `applied_by` ahora se llena con `usuario@host` (las 56 filas viejas siguen en
+  `NULL`, que no es información).
+
+Estado: las 4 aplicadas y verificadas en `ECCSA_Admon_Pruebas` — 13 tablas, 14
+foreign keys. **Correr el runner dos veces no cambia nada.**
+
+Guards del runner, y por qué existen:
+
+- **Aborta si el destino no es una base de pruebas**, salvo `HUB_MIGRATE_PRODUCTION=1`
+  *y* una confirmación escrita. Es lo que evita aplicar DDL en producción por un
+  `export` mal pegado.
+- **Una transacción por archivo.** Una migración a medias deja la base en un
+  estado que ninguna otra sabe reparar.
+- **Ya aplicada no se re-aplica**, y el registro va en la MISMA transacción que
+  el DDL: si el INSERT quedara fuera, la siguiente corrida fallaría con "la tabla
+  ya existe".
+
+### 2026-10-05 — Dos tests que finds cosas que ningún otro gate veía
+
+- **`tools/test_esquema.py`** — compara el SQL del código contra el esquema REAL
+  de la base. Un `INSERT` con una columna que la migración no creó no falla en el
+  build ni en el linter: falla el primer request en producción. Sin credenciales
+  se salta con aviso y sale 0, porque un test que falla por falta de
+  configuración entrena a ignorar el rojo.
+  Extracte el SQL con `tokenize` + `ast.literal_eval` en vez de escanear el
+  archivo crudo: la versión anterior reportaba como columnas inexistentes
+  variables de Python que quedaban al lado de una cadena (`c.Alias`, `ip`).
+  Se verificó **inyectando** una columna y una tabla falsas: las detecta.
+- **`tools/test_migraciones.py`** — el troceado por `GO`. `GO` es un separador de
+  lotes del SSMS, no SQL: mandarlo al servidor contesta `Incorrect syntax near
+  'GO'`, o sea que sin trocear **ninguna** migración es aplicable. Cubre `GO` a
+  secas, con espacios, en minúsculas, dos seguidos, y el `GO` dentro de un
+  literal (que no es separador).
+
+
 ### 2026-10-05 — La firma guardaba una URL donde debía guardar un `cid:`
 
 El peor bug de esta tanda, porque no daba ningún error y rompía el envío.

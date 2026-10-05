@@ -125,6 +125,21 @@ jobs:
       - name: Pruebas de firmas (cid, tokens y sanitizado)
         run: python3 tools/test_firmas.py
 
+      # ── Gate 3b-3: el código contra el esquema real ──────────────────────
+      # Un INSERT con una columna que la migración no creó no falla en el build
+      # ni en el linter: falla el primer request en producción. Sin credenciales
+      # en el runner este gate se salta solo (sale 0), porque un test que falla
+      # por falta de configuración entrena a ignorar el rojo.
+      - name: El código usa columnas que existen
+        run: python3 tools/test_esquema.py
+
+      # ── Gate 3b-4: el SQL de las migraciones es aplicable ────────────────
+      # `trocear()` es lo que evita el error clásico de estos archivos: `GO` es
+      # un separador de lotes del SSMS, no SQL, y mandarlo al servidor contesta
+      # "Incorrect syntax near 'GO'".
+      - name: Las migraciones se trocean bien
+        run: python3 tools/test_migraciones.py
+
       # ── Gate 3c: los manifests de la PWA ────────────────────────────────
       # Un manifiesto con un icono que no existe NO es un error de build: la PWA
       # instala y el ícono sale en blanco. Por eso se verifica que cada src
