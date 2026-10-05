@@ -17,6 +17,12 @@
 	import Redactar from './pages/Redactar.svelte';
 	import Reglas from './pages/Reglas.svelte';
 
+	// Los segmentos de la ruta, una vez. El dispatcher de abajo los compara por
+	// posición en vez de con `startsWith`/`endsWith`: la ruta del mensaje es
+	// `/cuenta/<id>/mensaje/<idMensaje>`, que TERMINA en el id del mensaje, así que
+	// un `endsWith('/mensaje')` nunca es cierto y la vista no se alcanza nunca.
+	const seg = $derived($path.split('/'));
+
 	let ready = $state(false);
 	let splashDone = $state(false);
 	let splashMsg = $state('');
@@ -149,6 +155,17 @@
 	<!-- shell-below-banner: el padding para no quedar bajo el banner fijo lo
 	     pone el shell (era un 3.8rem mágico repetido en cada app). -->
 	<div class={$auth.user ? 'shell-below-banner' : ''}>
+		<!--
+		  Los segmentos se sacan UNA vez y se comparan por posición. La ruta del
+		  mensaje es `/cuenta/<id>/mensaje/<idMensaje>`: cinco segmentos contando
+		  el vacío inicial.
+
+		  Podría escribirse `$path.endsWith('/mensaje')`, pero eso nunca es
+		  cierto —la ruta del mensaje TERMINA en el id del mensaje— y el resultado
+		  es que la vista de mensaje no se alcanza nunca: la cadena `{#if}` cae al
+		  genérico de `/cuenta/` y se ve la lista con el mensaje "dentro". Es un
+		  bug silencioso, porque la navegación funciona y la URL es correcta.
+		-->
 		{#if $path === '/login'}
 			<Login />
 		<!--
@@ -157,11 +174,11 @@
 		  preguntarse ANTES que `/cuenta/5`: si el genérico fuera primero, la
 		  vista de mensaje nunca se alcanzaría.
 		-->
-		{:else if $path.startsWith('/cuenta/') && $path.endsWith('/mensaje')}
+		{:else if seg[1] === 'cuenta' && seg[3] === 'mensaje' && seg.length >= 5}
 			<!-- ["", "cuenta", 5, "mensaje", 123] → cuenta en [2], mensaje en [4] -->
-			<Mensaje mensajeId={Number($path.split('/')[4])} onSalir={cerrarSesion} />
-		{:else if $path.startsWith('/cuenta/')}
-			<Cuenta cuentaId={Number($path.split('/')[2])} onSalir={cerrarSesion} />
+			<Mensaje mensajeId={Number(seg[4])} onSalir={cerrarSesion} />
+		{:else if seg[1] === 'cuenta' && seg.length >= 3}
+			<Cuenta cuentaId={Number(seg[2])} onSalir={cerrarSesion} />
 		{:else if $path === '/firmas'}
 			<Firmas onSalir={cerrarSesion} />
 		{:else if $path === '/reglas'}

@@ -105,10 +105,25 @@ export async function descargar(path) {
 	return res;
 }
 
+/**
+ * El cuerpo de un POST/PUT, listo para fetch.
+ *
+ * Un FormData se pasa TAL CUAL, sin JSON.stringify. Esto no es un detalle: si se
+ * serializa, `JSON.stringify(new FormData())` es la cadena `"{}"`, el `body` deja
+ * de ser un FormData, `request()` cree que es JSON y pone
+ * `Content-Type: application/json`, y FastAPI responde 422 porque no recibe el
+ * archivo. El síntoma es "subir imagen no funciona" sin ningún error visible.
+ *
+ * Cualquier otro objeto va como JSON, que es lo que espera el resto de la app.
+ */
+function cuerpo(body) {
+	return body instanceof FormData ? body : JSON.stringify(body);
+}
+
 export const api = {
 	get: (path) => request(path),
-	post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
-	put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
+	post: (path, body) => request(path, { method: 'POST', body: cuerpo(body) }),
+	put: (path, body) => request(path, { method: 'PUT', body: cuerpo(body) }),
 	delete: (path) => request(path, { method: 'DELETE' }),
 	descargar
 };

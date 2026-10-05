@@ -22,6 +22,11 @@
 	// Firma por defecto: la predeterminada del usuario, o la primera asignada a
 	// la cuenta elegida. Se recalcula al cambiar de cuenta porque una cuenta
 	// puede tener una firma propia.
+	// Si la casilla está marcada, qué firma se aplica. `aplicarFirma` es el
+	// booleano de la casilla; el id que se manda al backend se deriva de él, para
+	// que "desmarcar la firma" y "no mandar firma" no puedan quedar desincronizados.
+	let aplicarFirma = $state(true);
+	let idFirmaAplicada = $derived(aplicarFirma && firmaEfectiva ? firmaEfectiva.id : 0);
 	let firmaEfectiva = $derived(
 		(idFirma ? firmas.find((f) => f.id === idFirma)
 		         : firmas.find((f) => (f.cuentas || []).includes(cuentaId)) || firmas.find((f) => f.predeterminada))
@@ -119,7 +124,7 @@
 				// El contenteditable guarda HTML; el texto plano se arma de ese mismo
 				// HTML para no mandar un cuerpo vacío a quien no lo pinte.
 				cuerpo,
-				id_firma: idFirma || (firmaEfectiva ? firmaEfectiva.id : 0)
+				id_firma: idFirma || idFirmaAplicada
 			});
 			avisar(`Correo enviado (sigue la firma ${firmaEfectiva?.nombre || 'predeterminada'})`, 'success');
 			navigate(`/cuenta/${cuentaId}`);
@@ -189,14 +194,21 @@
 				<button class="btn btn-sm btn-secondary" onclick={_pedirFirma}>Cambiar</button>
 			</div>
 			{#if hayFirma}
+				<!--
+				  El checkbox va con su propio booleano, NO con `bind:checked={firmaEfectiva}`.
+				  `firmaEfectiva` es un $derived: asignarle descarta el valor, así que la
+				  casilla se quedaba siempre igual y el onchange nunca podía leer un
+				  estado nuevo. Además `bind:checked` sobre un objeto no tiene sentido.
+				-->
 				<label class="rd-check">
-					<input type="checkbox" id="mb-firma-check" bind:checked={firmaEfectiva}
-					       onchange={() => idFirma = firmaEfectiva ? firmaEfectiva.id : 0} />
+					<input type="checkbox" id="mb-firma-check" bind:checked={aplicarFirma} />
 					<span>Aplicar <strong>{firmaEfectiva.nombre}</strong> a este correo</span>
 				</label>
-				<div class="rd-firma-preview">
-					<iframe title="Firma" sandbox="" srcdoc={firmaEfectiva.html} style="height:74px"></iframe>
-				</div>
+				{#if aplicarFirma}
+					<div class="rd-firma-preview">
+						<iframe title="Firma" sandbox="" srcdoc={firmaEfectiva.html} style="height:74px"></iframe>
+					</div>
+				{/if}
 			{:else}
 				<p class="rd-sin-firma">
 					No hay ninguna firma. <a href="/firmas">Crea una</a>.

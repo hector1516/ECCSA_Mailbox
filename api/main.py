@@ -1918,6 +1918,78 @@ def _ruta_firma(clave: str) -> Optional[str]:
     return ruta
 
 
+# Bytes mágicos de cada formato que se acepta. `_TIPOS_OK` (arriba) es la lista
+# de content_types; esta es la lista de lo que REALMENTE se acepta como bytes, y
+# el content_type del navegador no es una fuente de confianza: lo pone quien
+# llama.
+_MAGICOS = {
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "image/webp": (b"RIFF",),
+}
+
+
+def _es_imagen(datos: bytes, tipo: str) -> bool:
+    """
+    ¿Los bytes empiezan como el tipo que dice el content_type?
+
+    Para WEBP se mira además el `WEBP` del offset 8: `RIFF` solo es un contenedor
+    genérico (también lo usan los .wav), así que aceptarlo solo por `RIFF`
+    dejaría pasar un archivo que no es una imagen.
+    """
+    firmas = _MAGICOS.get((tipo or "").lower())
+    if not firmas or not datos:
+        return False
+    if not datos.startswith(firmas):
+        return False
+    if (tipo or "").lower() == "image/webp":
+        return datos[8:12] == b"WEBP"
+    return True
+
+
+def _dimensiones(datos: bytes, tipo: str) -> tuple:
+    """
+    `(ancho, alto)` leyendo la cabecera del archivo. `(None, None)` si no se
+    puede. Es solo para maquetar: un logo sin dimensiones declaradas usa su
+    tamaño natural y se ve igual.
+    """
+    import struct
+    try:
+        t = (tipo or "").lower()
+        if t == "image/png" and len(datos) >= 24 and datos[12:16] == b"IHDR":
+            ancho, alto = struct.unpack(">II", datos[16:24])
+            return int(ancho), int(alto)
+        if t == "image/gif" and len(datos) >= 10:
+            ancho, alto = struct.unpack("<HH", datos[6:10])
+            return int(ancho), int(alto)
+        if t == "image/jpeg":
+            # Los JPEG no tienen ancho/alto al principio: hay que recorrer los
+            # segmentos SOF. Se detiene en el primero que los trae.
+            i = 2
+            while i + 9 < len(datos):
+                if datos[i] != 0xFF:
+                    break
+                marcador = datos[i + 1]
+                if marcador in (0xD8, 0x01) or 0xD0 <= marcador <= 0xD7:
+                    i += 2
+                    continue
+                largo = struct.unpack(">H", datos[i + 2:i + 4])[0]
+                if marcador in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                                0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    alto, ancho = struct.unpack(">HH", datos[i + 5:i + 9])
+                    return int(ancho), int(alto)
+                i += 2 + largo
+            return None, None
+        if t == "image/webp" and len(datos) >= 30 and datos[12:16] == b"VP8X":
+            ancho = int.from_bytes(datos[24:27], "little") + 1
+            alto = int.from_bytes(datos[27:30], "little") + 1
+            return ancho, alto
+    except Exception:
+        return None, None
+    return None, None
+
+
 def _cid_para(firma_id: int, nombre: str) -> str:
     """Content-ID estable y único. Sin esto, dos firmas con un logo llamado
     igual colisionarían al adjuntarse inline."""
@@ -1959,24 +2031,27 @@ async def subir_imagen_firma(firma_id: int,
     token = secrets.token_hex(20)          # 40 chars = CHAR(40)
     clave = f"{firma_id}/{token}{_TIPOS_OK[tipo]}"
 
+    # La validación de "esto es de verdad una imagen" se hace con los bytes
+    # mágicos, NO con Pillow. Pillow se excluyó a propósito de requirements.txt
+    # (esta app no procesa imágenes), y meterlo por leer dos números que solo se
+    # usan para maquetar el logo no compensa los ~40 MB.
+    #
+    # Los bytes mágicos importan por seguridad además de por robustez: esta
+    # imagen se sirve después en un endpoint PÚBLICO con `image/png`. Si el
+    # content_type declarado dijera PNG pero los bytes fueran HTML, un navegador
+    # viejo sin `nosniff` lo ejecutaría en el origen de la app.
+    if not _es_imagen(datos, tipo):
+        raise HTTPException(status_code=400, detail="El archivo no es una imagen válida")
+
     destino = _ruta_firma(clave)
     os.makedirs(os.path.dirname(destino), exist_ok=True)
     with open(destino, "wb") as fh:
         fh.write(datos)
 
-    from PIL import Image as _PILImage
-    ancho = alto = None
-    try:
-        with _PILImage.open(destino) as im:
-            ancho, alto = im.size
-    except Exception:
-        # Si Pillow no puede leerlo, no es una imagen válida aunque diga que lo
-        # es. Se borra y se avisa: mejor que no haya imagen a que haya una rota.
-        try:
-            os.unlink(destino)
-        except OSError:
-            pass
-        raise HTTPException(status_code=400, detail="El archivo no es una imagen válida")
+    # Las dimensiones son solo de maquetado (el `width`/`height` que se le pone a
+    # la etiqueta). Si no se pueden leer, se guardan NULL y el `img` usa su
+    # tamaño natural: es preferible a rechazar una imagen que sí es válida.
+    ancho, alto = _dimensiones(datos, tipo)
 
     cur = get_connection().cursor()
     cur.execute(

@@ -7,9 +7,15 @@
 # which app sends it.
 #
 # What's NOT here (and why):
-#   reportlab / Pillow → Mailbox doesn't generate PDFs and doesn't process
-#                        images. Adding them would add ~40 MB to the image for
-#                        nothing.
+#   reportlab / Pillow → Mailbox doesn't generate PDFs, and it doesn't PROCESS
+#                        images either: a signature image is validated by its
+#                        magic bytes and its dimensions are read straight from the
+#                        PNG/GIF/JPEG/WEBP header (see `_es_imagen` and
+#                        `_dimensiones` in api/main.py). Pillow would have been
+#                        ~40 MB for two integers that only set the logo's layout.
+#                        A previous version imported PIL to do exactly that and
+#                        every upload failed with a 500 plus a file orphaned in the
+#                        volume, because the import was outside the `try`.
 #   google-generativeai → no IA in this app.
 #   pysmb → the SMB share is used by the WORKER, in another container. This app
 #            doesn't touch the share.

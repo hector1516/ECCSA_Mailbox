@@ -7,6 +7,40 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-05 — Cuatro bugs que rompían funciones completas
+
+Ninguno daba error visible. Son de la clase que se descubre cuando alguien usa
+la app de verdad, y por eso se documentan con su modo de falla.
+
+- **El visor de mensajes era inalcanzable.** `App.svelte` ruteaba con
+  `$path.endsWith('/mensaje')`, pero la ruta del mensaje es
+  `/cuenta/<id>/mensaje/<idMensaje>`: **termina en el id del mensaje**, así que la
+  condición nunca era cierta. La cadena `{#if}` caía al caso genérico de
+  `/cuenta/` y se veía la lista con el mensaje "dentro". La navegación funcionaba y
+  la URL era correcta, así que nada se veía mal hasta que se abría un correo.
+  Ahora se comparan los segmentos por posición.
+- **Subir una imagen de firma fallaba siempre.** `api.post` hacía
+  `JSON.stringify(body)`, y `JSON.stringify(new FormData())` es la cadena `"{}"`.
+  Con eso el `body` dejaba de ser FormData, `request()` lo tomaba por JSON y
+  ponía `Content-Type: application/json`: FastAPI recibía un objeto vacío y
+  contestaba 422. El mismo bug de la lección del service worker (ver `AGENTS.md`
+  §Trampas), por el mismo motivo: **nunca forzar el Content-Type con FormData**.
+- **La casilla de "aplicar firma" no se podía desmarcar.** Usaba
+  `bind:checked={firmaEfectiva}` sobre un `$derived`: asignarle descarta el valor,
+  y encima `checked` sobre un objeto no significa nada. Ahora hay un booleano
+  propio y el id que se manda al backend se deriva de él, para que "desmarcar" y
+  "no mandar firma" no puedan quedar desincronizados.
+- **Subir una imagen daba 500 y dejaba un archivo huérfano.** El endpoint
+  importaba `PIL` —que `requirements.txt` excluía a propósito— **fuera** del
+  `try`, y el archivo ya se había escrito en disco para entonces: cada intento
+  fallido dejaba basura en el volumen. Ahora la imagen se valida por sus bytes
+  mágicos y las dimensiones se leen de la cabecera PNG/GIF/JPEG/WEBP, sin
+  Pillow. Los bytes mágicos además son una medida de seguridad: la imagen se
+  sirve después en un endpoint **público**, y si el `content_type` dijera PNG
+  mientras los bytes fueran HTML, un navegador viejo lo ejecutaría en el origen
+  de la app.
+
+
 ### 2026-10-05 — Esqueleto de la app, shell, login y home (0.1.0)
 
 **Decisiones de arquitectura que quedan fijadas** (el detalle está en `AGENTS.md`):
