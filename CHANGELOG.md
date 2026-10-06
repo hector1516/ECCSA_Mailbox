@@ -7,6 +7,95 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Pendiente] — Trabajo no liberado
 
+### 2026-10-06 — Las carpetas del buzón se detectan solas y aparecen como pestañas
+
+Las carpetas se crean en **el cliente de correo del usuario** (Gmail, Hostinger),
+no en la app. Antes el worker sincronizaba una sola carpeta, la raíz, así que
+todo lo que el usuario tenía organizado —"Newsletters", "Clientes", "Facturas"— era
+invisible en ECCSA: ni aparecía como pestaña ni se podía leer.
+
+Ahora el worker hace un `LIST` del buzón cada 6 ciclos y llena el catálogo. En la
+cuenta de Héctor aparecieron **80 carpetas**, en `robot@` 30, en la de Gmail 11.
+
+- Se clasifican por los **FLAGS que declara el servidor** (`\Trash`, `\Junk`,
+  `\Drafts`, `\Archive`), **no por el nombre**: en Gmail se llaman
+  `[Gmail]/Spam` y en Hostinger `Correo no deseado`. Una lista de nombres sería
+  medio diccionario que además falla en español, en inglés y en lo que invente el
+  siguiente proveedor.
+- `imap_client` gana **`status_folder()`**: un `STATUS` por carpeta dice cuántos
+  mensajes hay y cuántos sin leer **sin descargar una sola línea**. Por eso la
+  pestaña puede mostrar "488 correos, 3 sin leer" de una carpeta que todavía no se
+  ha sincronizado. Es lo que hace manejable encender o apagar una carpetita.
+- Botón **⚙️** en las pestañas de la cuenta para ver todas las carpetas y decidir
+  cuáles se traen. El botón de "crear carpeta" desaparece: no es una operación de
+  ECCSA, y una carpeta creada aquí que el usuario no ve en Gmail es una carpeta
+  fantasma.
+
+### 2026-10-06 — Corregido el default que llenaba 646 carpetas
+
+La migración `0054` dejó `Sincronizar = 1` por default y el primer listado encendió
+75 carpetas en la cuenta de Héctor y 25 en la de `robot@`.
+
+Peor: `robot@` tiene `INBOX/IT` con **3 800** mensajes, `INBOX/Onedrive` con
+**4 203** e `INBOX/ECC-SA` con **1 850**. La cuenta 4 tiene 646 carpetas.
+
+Por qué eso no habría terminado nunca: el sync solo mira 90 días y trae 200 por
+carpeta por ciclo. Una carpeta con 3 800 correos no se acaba en un ciclo, y como
+el trabajo se reparte con un presupuesto, el ciclo siguiente empieza de nuevo por
+el principio de esa carpeta. Se reprocesaba eternamente sin avanzar, consumiendo
+el presupuesto que necesitaban las demás.
+
+Ahora una carpeta nueva entra **apagada**: aparece como pestaña con su contador
+(gratis, vía `STATUS`) y el usuario enciende las que usa. Migración `0055` apagó
+todas las que el default había encendido.
+
+Dejé encendidas las 9 de trabajo de Héctor: `INBOX`, `AppsECCSA`, `ECCSA Team`,
+`Facturas`, `OneDrive`, `Otros`, `Refrendo 2025`, `SendThisFile` y `Wetransfer`.
+
+El worker también gained:
+- **`_priorizar()`**: la carpeta raíz primero, y después las que MENOS mensajes
+  indexados tengan. Es una cola de Constructor. Sin esto, si las carpetas grandes
+  van siempre de últimas, "Newsletters" con 300 mensajes nunca se sincroniza porque
+  cada ciclo se agota el presupuesto en "Todos los mensajes".
+- **Presupuesto de 600 mensajes nuevos por carpeta y ciclo**, para que encender 15
+  carpetas no deje al worker horas sin cerrar el ciclo.
+- El contador de ciclos vive en el **módulo**, no en el dict de la cuenta: ese dict
+  se relee de la base en cada ciclo, así que un contador ahí se reiniciaba a 1 y
+  nunca llegaba al umbral.
+
+### 2026-10-06 — `PUT` a carpetas con jerarquía daba 405
+
+El endpoint para encender/apagar una carpeta respondía **405 Method Not Allowed**
+con el código correcto compilado y desplegado. La causa es de dos capas:
+
+1. **El nombre de carpeta contiene `/`** (`INBOX/Otros`, `Archives/2024`). El
+   convertor por defecto de FastAPI es `[^/]+`, o sea `{nombre}` NO acepta barras,
+   y la ruta no casaba. Ahora es `{nombre:path}`.
+2. Al no casar, la petición caía en el **catch-all de la SPA**, que estaba
+   registrado como `@app.get("/{ruta:path}")`: captura todos los métodos y
+   respondía 405 en vez de 404.
+
+El catch-all quedó acotado a `GET`/`HEAD` y registrado como `Route` normal al final
+de `app.router.routes`. Se intentó aislarlo en un `APIRouter` y **empeoró**: queda
+como un solo objeto `_IncludedRouter` sin `.path`, y su `matches()` devuelve
+`Match.FULL` para cualquier método porque el filtro ocurre adentro — la SPA
+seguía ganándole a la API entera.
+
+De paso, el catch-all ya **no captura `api/`**: un `GET /api/algo-inexistente`
+devolvía el index.html de la SPA con un 200, y el front recibía HTML donde esperaba
+JSON, disfrazando un endpoint inexistente de un error de parseo.
+
+### 2026-10-06 — `mensaje` faltaba en las rutas de la SPA
+
+`/mensaje/424` daba **404 con carga directa**: recargar sobre un correo, o abrir un
+enlace compartido, no funcionaba. Las rutas del cliente viven en una lista
+explícita en `api/main.py` y `mensaje` no estaba.
+
+Es el caso que la lista explícita no cubría: la comparación es sobre el primer
+segmento, así que `/mensaje/424` tiene que encontrar `mensaje`. Ahora da 200, y
+una ruta inventada sigue dando 404 a propósito.
+
+
 ### 2026-10-06 — "Crear filtro" desde el mensaje abierto
 
 Botón nuevo en la fila de acciones del correo, junto a "Marcar como spam".

@@ -537,31 +537,54 @@
 			{/if}
 		{/if}
 
+		<!--
+			LAS ACCIONES VAN EN PARES DE DOS, NO EN UNA FILA.
+			─────────────────────────────────────────────────
+			Son siete botones. En una fila con `flex-wrap` cada uno mide lo que
+			mide su texto y la fila se va de la pantalla en móvil: «Responder a
+			todos» y «Marcar como spam» son largos y la última pareja se corta o
+			deja un hueco enorme.
+
+			El patrón es el del detalle de Cotizaciones Materiales de Admon:
+			`.grid-2` con dos botones `btn-block` por fila, cada uno ocupando la
+			mitad exacta. Se adapta a cualquier ancho sin `nowrap`, sin
+			`overflow` y sin tener que elegir un punto de corte.
+
+			La acción irreversible va sola y al final, como en Admon: separarla
+			del resto es lo que evita el toque de más al lado de «Responder».
+			No es una cuestión de jerarquía visual, es que el dedo no tiene que
+			recorrer seis botones para llegar a la que borra.
+		-->
 		<div class="mv-acciones">
-			<!-- Los tres de respuesta llevan los datos por sessionStorage, no por
-			     query: meter un correo en la URL lo pondría en el historial del
-			     navegador y en los logs del proxy. -->
-			<button class="btn btn-secondary" onclick={responder}>
-				↩️ Responder
-			</button>
-			<button class="btn btn-secondary" onclick={responderATodos}>
-				↩️↩️ Responder a todos
-			</button>
-			<button class="btn btn-secondary" onclick={reenviar}>
-				➜ Reenviar
-			</button>
-			<button class="btn btn-secondary" onclick={abrirMover}>
-				📁 Mover a carpeta
-			</button>
-			<button class="btn btn-secondary" onclick={() => (confirmar = 'spam')}>
-				🚫 Marcar como spam
-			</button>
-			<button class="btn btn-secondary" onclick={abrirFiltro}>
-				🎯 Crear filtro
-			</button>
-			<button class="btn btn-secondary mv-peligro" onclick={() => (confirmar = 'borrar')}>
-				🗑️ Eliminar
-			</button>
+			<div class="grid-2">
+				<button class="btn btn-secondary btn-block" onclick={responder}>
+					↩️ Responder
+				</button>
+				<button class="btn btn-secondary btn-block" onclick={responderATodos}>
+					↩️↩️ Responder a todos
+				</button>
+			</div>
+			<div class="grid-2">
+				<button class="btn btn-secondary btn-block" onclick={reenviar}>
+					➜ Reenviar
+				</button>
+				<button class="btn btn-secondary btn-block" onclick={abrirMover}>
+					📁 Mover
+				</button>
+			</div>
+			<div class="grid-2">
+				<button class="btn btn-secondary btn-block" onclick={() => (confirmar = 'spam')}>
+					🚫 Spam
+				</button>
+				<button class="btn btn-secondary btn-block" onclick={abrirFiltro}>
+					🎯 Crear filtro
+				</button>
+			</div>
+			<div class="mv-acciones-solo">
+				<button class="btn btn-secondary btn-block mv-peligro" onclick={() => (confirmar = 'borrar')}>
+					🗑️ Eliminar mensaje
+				</button>
+			</div>
 		</div>
 	{/if}
 
@@ -739,6 +762,44 @@
 	.mv-rutas b { color: var(--color-text); }
 
 	/* ── Adjuntos ────────────────────────────────────────────────────────── */
+	/* ── Fila de acciones ────────────────────────────────────────────────── */
+	.mv-acciones {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-top: 1rem;
+	}
+	/* Un hueco más grande antes de la acción irreversible: separa el gesto
+	   inocuo del que no tiene vuelta atrás. */
+	.mv-acciones-solo { margin-top: 0.35rem; }
+	/* En pantallas anchas, dos mitades de una fila a pantalla completa son
+	   botones de 500 px con tres palabras dentro: se ve un menú, no una acción.
+
+	   El tope de 34rem los deja con proporciones de botón. En Admon esto no
+	   hace falta porque su detalle vive en una barra lateral angosta; aquí el
+	   mensaje ocupa la pantalla entera, así que el límite hay que ponerlo.
+
+	   `margin: 0 auto` los centra en vez de pegarlos a la izquierda, que es lo
+	   que se vería con el ancho completo y el contenido a la derecha. */
+	.mv-acciones .grid-2,
+	.mv-acciones-solo {
+		max-width: 34rem;
+		width: 100%;
+		margin-left: auto;
+		margin-right: auto;
+	}
+	.mv-acciones .grid-2 .btn {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.85rem;
+		padding: 0.55rem 0.5rem;
+	}
+	@media (max-width: 420px) {
+		.mv-acciones .grid-2 .btn { font-size: 0.78rem; padding: 0.5rem 0.35rem; }
+	}
+
 	/* ── Modal "Mover a carpeta" ────────────────────────────────────────── */
 	.mv-overlay {
 		position: fixed;

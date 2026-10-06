@@ -44,6 +44,7 @@ import pymssql
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.routing import Route
 from pydantic import BaseModel
 
 APP_ID = "mailbox"
@@ -662,6 +663,54 @@ def crear_carpeta(cuenta_id: int, body: CarpetaReq, usuario: dict = Depends(requ
     return {"ok": True, "nombre": nombre}
 
 
+class SyncCarpetaReq(BaseModel):
+    sincronizar: bool = True
+
+
+# `{nombre:path}`, NO `{nombre}`.
+#
+# Las carpetas de IMAP se llaman con jerarquía: "INBOX/Clientes/Magna", "Archives/2024".
+# El convertor por defecto es `[^/]+`, o sea NO acepta barras, y FastAPI resuelve
+# `PUT .../carpetas/INBOX/Otros` como "no existe" y cae al catch-all de la SPA, que
+# solo atiende GET/HEAD y respondía 405 Method Not Allowed.
+#
+# `path` sí acepta barras: es el mismo convertor que usa `/{ruta:path}`.
+@app.put("/api/mailbox/cuentas/{cuenta_id}/carpetas/{nombre:path}")
+def alternar_sync_carpeta(cuenta_id: int, nombre: str, body: SyncCarpetaReq,
+                          usuario: dict = Depends(require_mailbox)):
+    """
+    Enciende o apaga la sincronización de UNA carpeta.
+
+    Esto es lo que hace manejable el caso "Newsletters con 300 mensajes" frente a
+    "Todos los mensajes con 8 mil": el usuario decide qué entra a ECCSA, y la
+    carpeta apagada sigue apareciendo como pestaña con lo que tiene en el buzón,
+    sin traer el contenido.
+
+    NO se permite apagar la carpeta raíz: es la de la que vive el correo del día y
+    la única que el sistema asume que existe. Sin ella la cuenta se vería bien en
+    la lista y vacía al entrar, que es el peor resultado posible.
+    """
+    if not _cuenta_del_usuario(cuenta_id, usuario):
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
+
+    cuenta = _una("SELECT CarpetaRaiz FROM HUB_MailboxCuentas WHERE Id = %s", (cuenta_id,))
+    raiz = (cuenta or {}).get("CarpetaRaiz") or "INBOX"
+    if nombre == raiz:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La carpeta principal ({raiz}) siempre se sincroniza",
+        )
+
+    existe = _una("SELECT Id FROM HUB_MailboxCarpetas WHERE IdCuenta = %s AND Nombre = %s",
+                  (cuenta_id, nombre))
+    if not existe:
+        raise HTTPException(status_code=404, detail="Esa carpeta no está en el buzón de la cuenta")
+
+    _ejecuta("UPDATE HUB_MailboxCarpetas SET Sincronizar = %s WHERE IdCuenta = %s AND Nombre = %s",
+             (1 if body.sincronizar else 0, cuenta_id, nombre))
+    return {"ok": True, "nombre": nombre, "sincronizar": bool(body.sincronizar)}
+
+
 @app.get("/api/mailbox/cuentas/{cuenta_id}/carpetas")
 def listar_carpetas(cuenta_id: int, usuario: dict = Depends(require_mailbox)):
     """
@@ -678,20 +727,23 @@ def listar_carpetas(cuenta_id: int, usuario: dict = Depends(require_mailbox)):
         raise HTTPException(status_code=404, detail="Cuenta no encontrada")
 
     #
-    # Las carpetas salen del CATÁLOGO (HUB_MailboxCarpetas), no de un
-    # `GROUP BY Carpeta` sobre los mensajes. Con el GROUP BY una carpeta vacía
-    # no existe para la app: el usuario la crea, no aparece, y para moverle un
-    # correo tendría que escribir el nombre a ciegas.
+    # Las carpetas salen del CATÁLOGO, que es lo que el worker llena con un
+    # `LIST` del buzón. Ahí están las carpetas que el usuario crea en
+    # Gmail/Hostinger, que es donde se organizan los correos: sin este catálogo
+    # esas carpetas no existían para la app.
     #
-    # El conteo se hace con un LEFT JOIN desde el catálogo para que una carpeta
-    # sin mensajes salga con total=0 en vez de desaparecer de la fila.
-    #
-    # Se hace `UNION` con las carpetas que sí tienen mensajes en el índice pero
-    # no están en el catálogo: si el worker no ha registrado una carpeta y hay
-    # 200 correos dentro, esos correos tienen que verse igual.
+    # `Unread` NO se cuenta aquí: es un filtro, no una carpeta.
     filas = _filas(
-        "SELECT c.Nombre AS Carpeta, ISNULL(m.Total, 0) AS Total, "
-        "       ISNULL(m.NoLeidos, 0) AS NoLeidos "
+        "SELECT c.Nombre AS Carpeta, c.Sincronizar AS Sincronizada, c.DelSistema, "
+        # Lo que HAY en el buzón viene del `STATUS` del worker y lo que tenemos
+        # indexado, del propio índice. Se muestran ambos porque no son lo mismo:
+        # una carpeta puede tener 400 en Gmail y 0 aquí, y esa diferencia es justo
+        # lo que el usuario necesita ver para decidir si la enciende.
+        "       CASE WHEN c.TotalEnBuzon IS NOT NULL THEN c.TotalEnBuzon "
+        "            ELSE ISNULL(m.Total, 0) END AS Total, "
+        "       CASE WHEN c.NoLeidosEnBuzon IS NOT NULL THEN c.NoLeidosEnBuzon "
+        "            ELSE ISNULL(m.NoLeidos, 0) END AS NoLeidos, "
+        "       ISNULL(m.Total, 0) AS EnIndice "
         "FROM HUB_MailboxCarpetas c "
         "OUTER APPLY (SELECT COUNT(*) AS Total, "
         "                     SUM(CASE WHEN Visto = 0 THEN 1 ELSE 0 END) AS NoLeidos "
@@ -699,8 +751,11 @@ def listar_carpetas(cuenta_id: int, usuario: dict = Depends(require_mailbox)):
         "              WHERE x.IdCuenta = c.IdCuenta AND x.Carpeta = c.Nombre "
         "                AND x.Eliminado = 0) m "
         "WHERE c.IdCuenta = %s "
+        # Carpetas con mensajes pero que todavía no están en el catálogo: no se
+        # pueden dejar de mostrar, o esos correos quedarían sin dónde verlos.
         "UNION ALL "
-        "SELECT x.Carpeta, COUNT(*), SUM(CASE WHEN x.Visto = 0 THEN 1 ELSE 0 END) "
+        "SELECT x.Carpeta, 0, 0, COUNT(*), "
+        "       SUM(CASE WHEN x.Visto = 0 THEN 1 ELSE 0 END), COUNT(*) "
         "FROM HUB_MailboxMensajes x "
         "WHERE x.IdCuenta = %s AND x.Eliminado = 0 "
         "  AND NOT EXISTS (SELECT 1 FROM HUB_MailboxCarpetas c2 "
@@ -710,7 +765,10 @@ def listar_carpetas(cuenta_id: int, usuario: dict = Depends(require_mailbox)):
     )
 
     carpetas = [{"id": f["Carpeta"], "total": int(f["Total"] or 0),
-                 "no_leidos": int(f["NoLeidos"] or 0)} for f in filas]
+                 "no_leidos": int(f["NoLeidos"] or 0),
+                 "sincronizada": bool(f.get("Sincronizada")),
+                 "del_sistema": bool(f.get("DelSistema"))}
+                for f in filas]
     for fija in ("INBOX", "Sent"):
         if not any(c["id"] == fija for c in carpetas):
             carpetas.append({"id": fija, "total": 0, "no_leidos": 0})
@@ -3075,7 +3133,17 @@ try:
     # vez que se agrega una ruta, que es justo cuando hay que acordarse.
     _SPA_ROUTES = {
         "firmas", "notificaciones", "cuenta", "login", "reglas", "redactar",
+        "mensaje",
     }
+    # Rutas con un identificador adentro, del tipo `/mensaje/424`. Van aparte
+    # porque la comparación es sobre el PRIMER segmento: `/mensaje/424` tiene que
+    # encontrar `mensaje` y no basta con tener el nombre en el conjunto de arriba,
+    # ya que `primero` es "mensaje" pero `ruta` es "mensaje/424".
+    #
+    # Sin esto, recargar sobre un correo daba 404 y el enlace de la notificación
+    # push (que abre /notificaciones con carga fresca) depended de que el service
+    # worker atrapara el 404. Un enlace que se comparte por WhatsApp no tiene
+    # service worker.
 
     # Estos tres NO se cachean nunca. Si el index.html queda cacheado, el
     # usuario sigue viendo el bundle viejo después de un deploy y la app parece
@@ -3094,9 +3162,16 @@ try:
             return _archivo("index.html")
         return {"message": "Mailbox ECCSA API", "version": app.version}
 
-    @app.get("/{ruta:path}")
     def spa_ruta(ruta: str):
         if not _hay_spa:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # 0) Una ruta que empieza con `api/` es de la API, no de la SPA. Si llegó
+        #    hasta aquí es porque no existe, y la respuesta es 404. Sin esto, un
+        #    `GET /api/algo-que-no-existe` devolvía el index.html de la SPA con un
+        #    200: el front recibía HTML donde esperaba JSON y el error real
+        #    (endpoint inexistente) se disfrazaba de error de parseo.
+        if ruta == "api" or ruta.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not found")
 
         # 1) ¿Es un archivo real de dist/ (logo, íconos, engrane, sw.js)?
@@ -3120,6 +3195,23 @@ try:
             return _archivo("index.html")
 
         raise HTTPException(status_code=404, detail="Not found")
+
+    #
+    # La ruta se registra DIRECTAMENTE en `app.router.routes`, al final, sin
+    # `include_router`.
+    #
+    # Se intentó con un `APIRouter` y quedó como un solo objeto `_IncludedRouter`
+    # dentro de `app.routes`, sin `.path` propio. Su `matches()` devuelve
+    # `Match.FULL` para CUALQUIER método y path porque el filtro ocurre adentro, no
+    # en la entrada de la lista: la SPA seguía ganándole a la API entera y el 405
+    # del `PUT` no se iba.
+    #
+    # Como `Route` normal, con sus métodos declarados, es la última que se
+    # evalúa y solo atiende GET/HEAD. Un `POST` o `PUT` a una ruta de API
+    # inexistente vuelve a dar 404, que es lo correcto.
+    app.router.routes.append(
+        Route("/{ruta:path}", spa_ruta, methods=["GET", "HEAD"], include_in_schema=False)
+    )
 
 except Exception as _e:  # noqa: BLE001
     print(f"[main] la SPA no se montó ({_e}); la API sigue funcionando", flush=True)

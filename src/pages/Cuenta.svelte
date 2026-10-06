@@ -23,9 +23,7 @@
 	let cargando = $state(true);
 	let error = $state('');
 	let carpeta = $state('NOLEIDOS');
-	let mostrarNueva = $state(false);
-	let nombreNueva = $state('');
-	let guardando = $state(false);
+	let mostrarCarpetas = $state(false);
 	let totalNoLeidos = $state(0);
 
 	// Las carpetas NO son una lista fija: se piden al backend, que las lee del
@@ -101,20 +99,21 @@
 		window.scrollTo({ top: 0, behavior: 'smooth' });
 	}
 
-	async function crearCarpeta() {
-		const nombre = nombreNueva.trim();
-		if (!nombre) return;
-		guardando = true;
+	async function alternarCarpeta(nombre, sincronizar) {
 		try {
-			await api.post(`/mailbox/cuentas/${cuentaId}/carpetas`, { nombre });
-			mostrarNueva = false;
-			nombreNueva = '';
-			avisar('Carpeta creada. Aparece en cuanto el worker la confirme.', 'success');
+			await api.put(
+				`/mailbox/cuentas/${cuentaId}/carpetas/${encodeURIComponent(nombre)}`,
+				{ sincronizar }
+			);
+			avisar(
+				sincronizar
+					? `«${nombre}» se Ira trayendo a partir del proximo ciclo del worker.`
+					: `«${nombre}» deja de traer correo. Lo que ya esta aqui se queda.`,
+				'success'
+			);
 			await cargarCarpetas();
 		} catch (e) {
-			avisar(e.message || 'No se pudo crear la carpeta', 'error');
-		} finally {
-			guardando = false;
+			avisar(e.message || 'No se pudo cambiar la carpeta', 'error');
 		}
 	}
 
@@ -163,21 +162,31 @@
 			</button>
 		{/each}
 
-		<button class="cb-tab cb-tab--nueva" onclick={() => (mostrarNueva = !mostrarNueva)}
-			title="Crear carpeta">＋</button>
+		<button class="cb-tab cb-tab--nueva" onclick={() => (mostrarCarpetas = !mostrarCarpetas)}
+			title="Administrar carpetas">⚙️</button>
 	</div>
 
-	{#if mostrarNueva}
-		<form class="cb-nueva" onsubmit={(e) => { e.preventDefault(); crearCarpeta(); }}>
-			<input type="text" bind:value={nombreNueva} maxlength="60" placeholder="Nombre de la carpeta"
-				autofocus aria-label="Nombre de la carpeta" />
-			<button class="btn btn-sm btn-primary" type="submit" disabled={guardando || !nombreNueva.trim()}>
-				{guardando ? 'Creando…' : 'Crear'}
-			</button>
-			<button class="btn btn-sm btn-secondary" type="button" onclick={() => (mostrarNueva = false)}>
-				Cancelar
-			</button>
-		</form>
+	{#if mostrarCarpetas}
+		<div class="cb-panel">
+			<p class="cb-panel-nota">
+				Las carpetas se crean en tu correo (Gmail / Outlook) y ECCSA las detecta
+				solas. Aquí decides cuáles se traen para poder leerlas aquí.
+			</p>
+			{#each carpetas as c (c.id)}
+				<div class="cb-fila">
+					<span class="cb-fila-nombre">{etiquetaCarpeta(c.id).icon} {c.label}</span>
+					<span class="cb-fila-cuenta">{c.total} {c.total === 1 ? 'correo' : 'correos'}</span>
+					{#if c.sincronizada}
+						<span class="cb-on" title="Se trae a ECCSA">Sincronizada</span>
+					{:else}
+						<button class="btn btn-sm btn-secondary"
+							onclick={() => alternarCarpeta(c.id, true)}>Sincronizar</button>
+					{/if}
+				</div>
+			{/each}
+			<button class="btn btn-sm btn-secondary cb-panel-cerrar"
+				onclick={() => (mostrarCarpetas = false)}>Cerrar</button>
+		</div>
 	{/if}
 
 	{#if cargando}
@@ -251,6 +260,33 @@
 	.cb-email { font-weight: 600; color: var(--color-text); }
 	.cb-sync--nunca { color: var(--color-warning); }
 	.cb-error { color: var(--color-danger); flex-basis: 100%; }
+
+	/* ── Panel de carpetas ───────────────────────────────────────────────── */
+	.cb-panel {
+		background: var(--color-surface);
+		border: 1px solid var(--color-line);
+		border-radius: var(--radius-sm);
+		padding: 0.8rem;
+		margin-bottom: 1rem;
+	}
+	.cb-panel-nota {
+		margin: 0 0 0.7rem;
+		font-size: 0.78rem;
+		color: var(--color-text-muted);
+		line-height: 1.4;
+	}
+	.cb-fila {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.45rem 0;
+		border-bottom: 1px solid var(--color-line);
+		font-size: 0.85rem;
+	}
+	.cb-fila-nombre { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.cb-fila-cuenta { color: var(--color-text-muted); font-size: 0.75rem; white-space: nowrap; }
+	.cb-on { color: var(--color-primary); font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+	.cb-panel-cerrar { width: 100%; margin-top: 0.7rem; }
 
 	/* ── Carpeta nueva ──────────────────────────────────────────────────── */
 	.cb-nueva {
