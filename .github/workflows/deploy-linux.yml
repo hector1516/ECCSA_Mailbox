@@ -44,7 +44,7 @@ concurrency:
 env:
   DEPLOY_HOST: 10.188.141.17
   DEPLOY_USER: deploy
-  IMAGE: ghcr.io/${{ github.repository_owner }}/eccsa-mailbox
+  IMAGE: ghcr.io/${{ github.repository_owner }}/mailbox
   TAG: ${{ github.sha }}
 
 jobs:
@@ -190,15 +190,30 @@ jobs:
           set -euo pipefail
           SSH="ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes $DEPLOY_USER@$DEPLOY_HOST"
 
-          # Sin secretos en el comando remoto: run_app.sh sourcea /etc/mailbox.env
-          # solo. Mandarlos por acá los escribiría en el historial del servidor y
-          # exigiría `sudo -E` (SETENV), que el sudoers no permite.
           $SSH "bash -s" <<REMOTE
           set -euo pipefail
           IMAGE='${{ env.IMAGE }}:${{ env.TAG }}'
 
           echo "--- bajando imagen ---"
           sudo docker pull "\$IMAGE"
+
+          # ── ¿Administra Arcane este contenedor? ──────────────────────────────
+          # Si tiene el label com.docker.compose.project, su dueño es Arcane
+          # (docker.ecc-sa.com.mx). run_app.sh haría `docker rm mailbox` y dejaría
+          # el project de Arcane sin contenedor.
+          #
+          # La imagen ya está publicada en GHCR por el job de build, así que el
+          # trabajo útil ya está hecho. Solo queda que el operador la aplique.
+          COMPOSE_PROJECT=\$(sudo docker inspect \
+            -f '{{ index .Config.Labels "com.docker.compose.project" }}' \
+            mailbox 2>/dev/null || echo "")
+          if [ -n "\$COMPOSE_PROJECT" ]; then
+            echo "ATENCION: 'mailbox' lo administra Arcane (project=\$COMPOSE_PROJECT)."
+            echo "           No recreo el contenedor. La imagen \$IMAGE ya está en ghcr.io."
+            echo "           Para aplicar: Arcane → Projects → mailbox → Updates → Update."
+            sudo docker inspect -f 'estado={{.State.Status}} imagen={{.Image}}' mailbox
+            exit 0
+          fi
 
           echo "--- recreando contenedor (núcleo común, sin arrancar) ---"
           # El override viaja como variable del comando sudo (`sudo VAR=x cmd`),
