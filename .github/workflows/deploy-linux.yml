@@ -137,117 +137,37 @@ jobs:
 
   # ── Deploy ────────────────────────────────────────────────────────────────
   # Baja la imagen, recrea el contenedor SIN arrancarlo y publica el estado.
-  deploy:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ESTÁNDAR DE DESPLIEGUE (igual en las 6 apps): el job `build` de arriba
+  # construye y publica en ghcr.io, y acá NO se toca el servidor.
+  #
+  # Antes este job entraba por SSH a WebbApps, bajaba la imagen y recreaba el
+  # contenedor. Eso ya no debe existir: mailbox es un Project de Arcane y Arcane
+  # es el dueño. Recreato por SSH dejaría al Project sin contenedor — y además
+  # exigiría un DEPLOY_SSH_KEY que este repo nunca tuvo, por eso el job venía
+  # fallando desde antes de la migración.
+  #
+  # El servidor no compila, no baja imágenes y no recrea contenedores. Solo
+  # Arcane, cuando el operador da "Update".
+  # ─────────────────────────────────────────────────────────────────────────────
+  cerrar:
+    name: Cerrar (el servidor no interviene)
     needs: [build]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - name: Preparar clave SSH
-        env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          # Se valida la cabecera: hay usuarios que guardan el secret con un
-          # newline de más y ssh lo rechaza con un error poco claro.
-          echo "$SSH_KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-          head -c 40 ~/.ssh/id_deploy | grep -q 'OPENSSH PRIVATE KEY' \
-            || { echo "::error::DEPLOY_SSH_KEY no parece una clave privada válida"; exit 1; }
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Comprobar que el servidor tiene el app.conf
-        run: |
-          set -euo pipefail
-          SSH="ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes $DEPLOY_USER@$DEPLOY_HOST"
-          # Falla temprano y con un mensaje útil: si app.conf no está, run_app.sh
-          # aborta con "no existe la definición", que no dice qué hacer.
-          if ! $SSH "test -f /opt/apps/mailbox/app.conf"; then
-            echo "::error::falta /opt/apps/mailbox/app.conf en $DEPLOY_HOST"
-            echo "::error::Crear (necesita root):"
-            echo "::error::  sudo mkdir -p /opt/apps/mailbox"
-            echo "::error::  sudo cp app.conf /opt/apps/mailbox/app.conf"
-            echo "::error::Contenido en deploy/app.conf de este repo"
-            exit 1
-          fi
-          if ! $SSH "test -f /etc/mailbox.env"; then
-            echo "::error::falta /etc/mailbox.env en $DEPLOY_HOST"
-            echo "::error::Crear (necesita root): sudo install -m 600 -o root -g root /dev/null /etc/mailbox.env"
-            echo "::error::Luego llenarlo con HUB_DB_* (ver deploy/env.local.example)"
-            exit 1
-          fi
-          echo "ok · app.conf y mailbox.env están en el servidor"
-
-      - name: Chquear puertos
-        run: |
-          set -euo pipefail
-          SSH="ssh -i ~/.ssh/id_deploy -o BatchMode=yes $DEPLOY_USER@$DEPLOY_HOST"
-          $SSH "sudo /usr/bin/bash /opt/apps/_lib/check-ports.sh mailbox" || true
-
-      - name: Bajar imagen y recrear contenedor
-        run: |
-          set -euo pipefail
-          SSH="ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes $DEPLOY_USER@$DEPLOY_HOST"
-
-          $SSH "bash -s" <<REMOTE
-          set -euo pipefail
-          IMAGE='${{ env.IMAGE }}:${{ env.TAG }}'
-
-          echo "--- bajando imagen ---"
-          sudo docker pull "\$IMAGE"
-
-          # ── ¿Administra Arcane este contenedor? ──────────────────────────────
-          # Si tiene el label com.docker.compose.project, su dueño es Arcane
-          # (docker.ecc-sa.com.mx). run_app.sh haría `docker rm mailbox` y dejaría
-          # el project de Arcane sin contenedor.
-          #
-          # La imagen ya está publicada en GHCR por el job de build, así que el
-          # trabajo útil ya está hecho. Solo queda que el operador la aplique.
-          COMPOSE_PROJECT=\$(sudo docker inspect \
-            -f '{{ index .Config.Labels "com.docker.compose.project" }}' \
-            mailbox 2>/dev/null || echo "")
-          if [ -n "\$COMPOSE_PROJECT" ]; then
-            echo "ATENCION: 'mailbox' lo administra Arcane (project=\$COMPOSE_PROJECT)."
-            echo "           No recreo el contenedor. La imagen \$IMAGE ya está en ghcr.io."
-            echo "           Para aplicar: Arcane → Projects → mailbox → Updates → Update."
-            sudo docker inspect -f 'estado={{.State.Status}} imagen={{.Image}}' mailbox
-            exit 0
-          fi
-
-          echo "--- recreando contenedor (núcleo común, sin arrancar) ---"
-          # El override viaja como variable del comando sudo (`sudo VAR=x cmd`),
-          # que sudo 1.9 sí preserva; lo que NO se permite es `-E`, que exige
-          # SETENV. Así el SHA no queda en el historial del shell del servidor.
-          sudo APP_IMAGE_OVERRIDE="\$IMAGE" /usr/bin/bash /opt/apps/_lib/run_app.sh mailbox
-
-          echo "--- estado final ---"
-          sudo docker inspect -f 'estado={{.State.Status}} imagen={{.Image}}' mailbox
-          REMOTE
-
-      - name: Publicar el estado
+      - name: Resumen
         run: |
           {
+            echo "### Imagen publicada · el servidor no hizo nada"
             echo ""
-            echo "### Estado en el servidor"
+            echo "- **imagen**: \`ghcr.io/hector1516/mailbox\` → :latest y :\`${{ github.sha }}\`"
+            echo "- **build**: en la nube (\`${{ runner.name }}\`) — el server no compiló"
+            echo "- **deploy**: ninguno — Arcane administra el contenedor"
             echo ""
-            echo "- imagen: \`${{ env.IMAGE }}:${{ env.TAG }}\`"
-            echo "- digest: \`${{ steps.build.outputs.digest }}\`"
-            echo "- **contenedor recreado pero NO arrancado** (\`APP_AUTO_START=0\`)"
+            echo "### Siguiente paso (manual, en Arcane)"
+            echo "1. \`https://docker.ecc-sa.com.mx\`"
+            echo "2. **Projects → mailbox → Updates**"
+            echo "3. **Update** — Arcane baja la imagen y recrea el contenedor"
             echo ""
-            echo "Para activarlo:"
-            echo '```'
-            echo "ssh deploy@10.188.141.17 'sudo docker start mailbox'"
-            echo '```'
-            echo ""
-            echo "Para verificar salud:"
-            echo '```'
-            echo "ssh deploy@10.188.141.17 'sudo /usr/bin/bash /opt/apps/_lib/verify_app.sh mailbox'"
-            echo '```'
-            echo ""
-            echo "Para volver a una versión anterior:"
-            echo '```'
-            echo "ssh deploy@10.188.141.17 'sudo APP_IMAGE_OVERRIDE=ghcr.io/hector1516/eccsa-mailbox:<sha-anterior> \\"
-            echo "  /usr/bin/bash /opt/apps/_lib/run_app.sh mailbox'"
-            echo '```'
+            echo "No hace falta SSH, ni claves, ni scripts en el servidor."
           } >> "$GITHUB_STEP_SUMMARY"
