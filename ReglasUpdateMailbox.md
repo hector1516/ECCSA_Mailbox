@@ -29,7 +29,7 @@ construye la CI **en la nube** y Arcane es el único que administra el contenedo
 | Workflow | `.github/workflows/deploy-linux.yml` |
 | Jobs | desbloquear → build → cerrar |
 | Puertos | 8104 → 8000 |
-| Salud | GET /health (200) — ⚠️ `/healthz` devuelve **500** por un bug de la app (`'Request' object has no attribute 'startswith'`); el healthcheck del contenedor usa `/health` |
+| Salud | GET /health (200) — `/healthz` y cualquier ruta desconocida dan **404** |
 | ¿Toca el servidor? | No |
 
 ## Comprobar que salió bien
@@ -101,9 +101,12 @@ El job final se llama `cerrar`: no hace nada, solo deja el resumen. Antes exist�
 `deploy` que entraba por SSH y recreaba el contenedor, y fallaba siempre porque el
 repo nunca tuvo `DEPLOY_SSH_KEY`. Ya no hay SSH en este flujo.
 
-**Pendiente conocido:** `Check` falla con
-`AttributeError: module 'pymssql' has no attribute 'Connection'`. Es un bug del
-workflow de validación, no del deploy.
+**Resuelto el 2026-10-23.** `Check` fallaba con
+`AttributeError: module 'pymssql' has no attribute 'Connection'`: la anotación
+de `get_connection()` se evaluaba al importar `api/main.py`, y las versiones
+nuevas de pymssql ya no exponen `Connection`. Ahora la anotación va entre
+comillas (perezosa). En la misma pasada se arregló el catch-all de la SPA, que
+devolvía **500** en vez de 404 para `/healthz` y `/api/inexistente`.
 
 ---
 
