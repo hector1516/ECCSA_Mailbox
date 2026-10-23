@@ -77,7 +77,13 @@ DB_DATABASE = os.environ.get("HUB_DB_DATABASE", "ECCSA_Admon")
 _local = threading.local()
 
 
-def get_connection() -> pymssql.Connection:
+def get_connection() -> "pymssql.Connection":
+    # La anotación va entre comillas a propósito: se evalúa al importar el
+    # módulo, y las versiones nuevas de pymssql ya no exponen `Connection`.
+    # Sin comillas, cualquier herramienta que importe api.main (el test del
+    # sanitizador, por ejemplo) moría con
+    # `AttributeError: module 'pymssql' has no attribute 'Connection'`
+    # aunque el runtime fuera correcto. Comillas = anotación perezosa.
     """
     Conexión por hilo, con sonda de vida y reconexión automática.
 
