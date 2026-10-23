@@ -29,7 +29,7 @@ construye la CI **en la nube** y Arcane es el único que administra el contenedo
 | Workflow | `.github/workflows/deploy-linux.yml` |
 | Jobs | desbloquear → build → cerrar |
 | Puertos | 8104 → 8000 |
-| Salud | GET /healthz |
+| Salud | GET /health (200) — ⚠️ `/healthz` devuelve **500** por un bug de la app (`'Request' object has no attribute 'startswith'`); el healthcheck del contenedor usa `/health` |
 | ¿Toca el servidor? | No |
 
 ## Comprobar que salió bien
