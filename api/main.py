@@ -3162,7 +3162,15 @@ try:
             return _archivo("index.html")
         return {"message": "Mailbox ECCSA API", "version": app.version}
 
-    def spa_ruta(ruta: str):
+    def spa_ruta(request: Request):
+        # Endpoint de Starlette puro (se registra como `Route`, no con
+        # `@app.get`): NO hay inyección de parámetros como en FastAPI. Antes
+        # declaraba `ruta: str`, así que el primer argumento era el `Request` y
+        # cualquier ruta que cayera aquí (/healthz, /api/inexistente, …) moría
+        # con `'Request' object has no attribute 'startswith'` → 500 en vez del
+        # 404 que corresponde. La ruta se lee de `path_params`.
+        ruta = request.path_params.get("ruta", "")
+
         if not _hay_spa:
             raise HTTPException(status_code=404, detail="Not found")
 
