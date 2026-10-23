@@ -1,5 +1,12 @@
 # Deploy — Mailbox ECCSA
 
+> ⚠️ **Este documento es el camino LEGACY.** Describe `app.conf` +
+> `/opt/apps/_lib/run_app.sh`, que **ya no se usa**.
+> El deploy vigente está en `ReglasUpdateMailbox.md`: CI en `ubuntu-latest` →
+> `ghcr.io/hector1516/mailbox` → Arcane → *Updates → Update*. Si el contenedor
+> tiene la etiqueta `com.docker.compose.project`, no correr `run_app.sh`: le
+> quita el contenedor al Project y Arcane deja de marcar actualizaciones.
+
 `https://mailbox.ecc-sa.com.mx` → Cloudflare → **WebbApps (Debian) `10.188.141.17:8104`**
 
 OJO: este es el esquema **nuevo** (Linux), no el de ServerVM con PowerShell y
@@ -20,7 +27,7 @@ archivo de datos**, no un script nuevo.
 | Recursos | 1 vCPU · 1.9 GB RAM · el build **no** corre ahí |
 | Puerto host | **8104** → 8000 del contenedor (8000/8200 son de workersadmon, 8100 field, 8101 dashboard, 8103 admon) |
 | Contenedor | `mailbox` |
-| Imagen | `ghcr.io/hector1516/eccsa-mailbox` |
+| Imagen | **`ghcr.io/hector1516/mailbox`** (el paquete NO se llama `eccsa-mailbox`) |
 | Red | `mailbox_net` |
 | Volumen | `mailbox_data:/data/mailbox` (cuerpos + inline; **no** adjuntos) |
 | Secrets | `/etc/mailbox.env` (600 root:root) |
@@ -111,10 +118,12 @@ Cada deploy taguea la imagen con el SHA del commit, así que volver atrás es
 desplegar otro SHA:
 
 ```bash
-sudo docker images ghcr.io/hector1516/eccsa-mailbox
+sudo docker images ghcr.io/hector1516/mailbox
 
+# Si el contenedor lo administra Arcane, NO hacer docker rm: se le quita el
+# contenedor al Project. Revertir el commit y dar Update es el camino sano.
 sudo docker rm mailbox
-sudo APP_IMAGE_OVERRIDE=ghcr.io/hector1516/eccsa-mailbox:<sha-anterior> \
+sudo APP_IMAGE_OVERRIDE=ghcr.io/hector1516/mailbox:<sha-anterior> \
   /usr/bin/bash /opt/apps/_lib/run_app.sh mailbox
 sudo docker start mailbox
 ```

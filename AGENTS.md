@@ -243,15 +243,22 @@ FROM sys.tables ...)`) · `GO` solo en su línea · cabecera con `-- Migración`
 ## 12. Deploy
 
 El servidor es **WebbApps (Debian) 10.188.141.17**, no ServerVM. Ver
-`deploy/DEPLOY.md`.
+`deploy/DEPLOY.md` y `ReglasUpdateMailbox.md`.
 
 - Puerto host **8104** → 8000 del contenedor
-- Imagen `ghcr.io/hector1516/eccsa-mailbox`, el CI compila en `ubuntu-latest` y
-  el servidor solo hace `docker pull` (1 vCPU / 1.9 GB no compila nada)
+- Imagen **`ghcr.io/hector1516/mailbox`** (`:latest` + `:<sha>`). El CI compila en
+  `ubuntu-latest` y el servidor solo hace `docker pull` (1 vCPU / 1.9 GB no
+  compila nada)
 - Secrets en `/etc/mailbox.env` (600 root:root), **nunca** en GitHub
-- `APP_AUTO_START=0`: un push **no** cambia producción; alguien arranca a mano
-- Crear el contenedor es la lógica compartida de `/opt/apps/_lib/run_app.sh`;
-  Mailbox solo aporta `deploy/app.conf`
+- **Arcane es el dueño del contenedor.** Un push publica la imagen, pero
+  producción no cambia hasta que el operador da
+  *Arcane → Projects → mailbox → Updates → Update*
+- **No** usar `deploy/app.conf` ni `/opt/apps/_lib/run_app.sh`: es el camino
+  legacy y recrea el contenedor por fuera de Arcane
+
+> ⚠️ El nombre del paquete es `mailbox`, **no** `eccsa-mailbox`. El repo se llama
+> `ECCSA_Mailbox` y el workflow trae `/mailbox` escrito a mano justamente para
+> que Arcane lo encuentre. Ver la nota al final de `ReglasUpdateMailbox.md`.
 
 ---
 
