@@ -3,7 +3,10 @@
 # Sin Node: el frontend se compila en CI (ubuntu-latest) y el resultado llega en
 # dist/. El servidor de despliegue tiene 1 vCPU y 1.9 GB de RAM; compilar ahí no
 # entra. Ver deploy/DEPLOY.md y el workflow deploy-linux.yml.
-FROM python:3.11-slim
+# Base estándar del ecosistema: mirror.gcr.io (espejo pull-through de Docker
+# Hub). Docker Hub y ECR Public aplican cuotas por IP a los pulls anónimos y
+# ya tumbaron la CI dos veces; el espejo sirve el mismo manifiesto sin cuota.
+FROM mirror.gcr.io/library/python:3.11-slim
 
 WORKDIR /app
 

@@ -26,8 +26,8 @@ construye la CI **en la nube** y Arcane es el único que administra el contenedo
 | Paquete | `mailbox` |
 | Imagen | `ghcr.io/hector1516/mailbox` |
 | Repositorio | [hector1516/ECCSA_Mailbox](https://github.com/hector1516/ECCSA_Mailbox) |
-| Workflow | `.github/workflows/deploy-linux.yml` |
-| Jobs | desbloquear → build → cerrar |
+| Workflow | `.github/workflows/build-image.yml` |
+| Jobs | build |
 | Puertos | 8104 → 8000 |
 | Salud | GET /health (200) — `/healthz` y cualquier ruta desconocida dan **404** |
 | ¿Toca el servidor? | No |
@@ -40,7 +40,7 @@ Antes de ir a Arcane, mira que los jobs estén en verde:
 https://github.com/hector1516/ECCSA_Mailbox/actions
 ```
 
-deploy-linux.yml · desbloquear → build → cerrar
+build-image.yml · build
 
 Arcane: `https://docker.ecc-sa.com.mx` → **Projects → mailbox → Updates**.
 Ahí debe aparecer la imagen nueva con un digest distinto. Ahí es donde aplicas.
