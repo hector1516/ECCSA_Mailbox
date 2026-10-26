@@ -35,7 +35,10 @@ import os
 import re
 import secrets
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tz_mx import now_mx
 from html.parser import HTMLParser
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
@@ -198,7 +201,7 @@ def _publico(u: dict) -> dict:
 
 def _crear_sesion(usuario: dict, dispositivo: str) -> dict:
     token, token_hash = _nuevo_token()
-    ahora = datetime.now()
+    ahora = now_mx()
     _ejecuta(
         "INSERT INTO HUB_MailboxSesiones "
         "(TokenHash, IdUsuario, Email, Dispositivo, Creado, UltimoUso, Expira, Activo) "
@@ -225,7 +228,7 @@ def _usuario_por_token(token: str) -> Optional[dict]:
     )
     if not sesion or not sesion.get("Activo"):
         return None
-    if sesion["Expira"] and sesion["Expira"] < datetime.now():
+    if sesion["Expira"] and sesion["Expira"] < now_mx():
         return None
 
     # HUB_Users se relee en CADA request a propósito: los permisos siempre están
@@ -245,7 +248,7 @@ def _usuario_por_token(token: str) -> Optional[dict]:
     # esa pantalla existe para decir. Y otro invisible: cada request escribía en
     # todas las filas del usuario, así que "5 min sin escribir" se convertía en
     # "5 min sin escribir × N sesiones".
-    ahora = datetime.now()
+    ahora = now_mx()
     _ejecuta(
         "UPDATE HUB_MailboxSesiones SET UltimoUso = %s "
         "WHERE Id = %s AND (UltimoUso IS NULL OR UltimoUso < %s)",
@@ -341,7 +344,7 @@ def auth_sesiones(usuario: dict = Depends(require_mailbox)):
             "FROM HUB_MailboxSesiones "
             "WHERE IdUsuario = %s AND Activo = 1 AND Expira > %s "
             "ORDER BY UltimoUso DESC",
-            (usuario["Id"], datetime.now()),
+            (usuario["Id"], now_mx()),
         )
     }
 
