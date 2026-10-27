@@ -20,6 +20,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api/ ./api/
+COPY tz_mx.py ./tz_mx.py
 
 # Frontend compilado por fuera (npm run build) y servido por FastAPI en "/".
 #
