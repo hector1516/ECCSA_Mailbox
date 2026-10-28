@@ -1,0 +1,97 @@
+/* responsive.css — Mejoras responsive para ECCSA Mailbox
+   Se importa en main.js después de app.css.
+   Breakpoints: móvil <768px, tablet 768-1024px, desktop >1024px */
+
+/* ── Base: touch targets mínimos ── */
+button, a, input, select, textarea {
+    min-height: 44px;
+}
+
+/* ── Móvil (<768px) ── */
+@media (max-width: 767px) {
+    /* Lista de correos: una columna */
+    .correo-lista {
+        width: 100% !important;
+    }
+
+    /* Visor de correo: ancho completo */
+    .correo-visor {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    /* Formularios: una columna */
+    form, .form-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    /* Tablas: scroll horizontal */
+    .tabla, table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Padding reducido */
+    .page, .container {
+        padding: 8px !important;
+    }
+
+    /* Inputs: evitar zoom en iOS */
+    input, select, textarea {
+        font-size: 16px !important;
+    }
+
+    /* Modal: ancho completo */
+    .modal {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+    }
+}
+
+/* ── Tablet (768px-1024px) ── */
+@media (min-width: 768px) and (max-width: 1024px) {
+    /* Layout de dos columnas en landscape */
+    .correo-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    /* Touch targets */
+    button, a, input, select, textarea {
+        min-height: 44px;
+    }
+
+    /* Tablas: scroll horizontal si es necesario */
+    .tabla, table {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+/* ── iPad específico (4:3 aspect ratio) ── */
+@media (min-width: 768px) and (max-width: 1024px) and (orientation: portrait) {
+    /* Layout de una columna en portrait */
+    .correo-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (min-width: 768px) and (max-width: 1024px) and (orientation: landscape) {
+    /* Layout de dos columnas en landscape */
+    .correo-container {
+        grid-template-columns: 35% 65%;
+    }
+}
+
+/* ── Desktop (>1024px) ── */
+@media (min-width: 1025px) {
+    /* Layout normal de desktop */
+    .correo-container {
+        display: grid;
+        grid-template-columns: 300px 1fr;
+        gap: 1rem;
+    }
+}
