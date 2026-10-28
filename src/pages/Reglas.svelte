@@ -4,7 +4,7 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { avisar } from '$lib/stores/toasts.js';
 	import { navigate } from '$lib/router.js';
-	import ActionsBar from '../components/ActionsBar.svelte';
+	import ActionsBar from '$lib/components/ActionsBar.svelte';
 
 	let { onSalir = null } = $props();
 

@@ -5,8 +5,8 @@
 	import { avisar } from '$lib/stores/toasts.js';
 	import { navigate } from '$lib/router.js';
 	import { ponerContador, refrescarContador } from '$lib/push.js';
-	import ActionsBar from '../components/ActionsBar.svelte';
-	import Paginacion from '../components/Paginacion.svelte';
+	import ActionsBar from '$lib/components/ActionsBar.svelte';
+	import Paginacion from '$lib/components/Paginacion.svelte';
 
 	let { cuentaId = 0, onSalir = null } = $props();
 

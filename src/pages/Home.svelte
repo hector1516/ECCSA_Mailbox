@@ -5,7 +5,7 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { navigate } from '$lib/router.js';
 	import { ponerContador, refrescarContador } from '$lib/push.js';
-	import ActionsBar from '../components/ActionsBar.svelte';
+	import ActionsBar from '$lib/components/ActionsBar.svelte';
 
 	/** onSalir lo pasa App.svelte; acá solo se propaga a la barra de acciones. */
 	let { onSalir = null } = $props();

@@ -5,8 +5,8 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { toasts, cerrarAviso } from '$lib/stores/toasts.js';
-	import LogoTraceLoader from './components/effects/LogoTraceLoader.svelte';
-	import Changelog from './components/Changelog.svelte';
+	import LogoTraceLoader from '$lib/components/effects/LogoTraceLoader.svelte';
+	import Changelog from '$lib/components/Changelog.svelte';
 	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
 	import Login from './pages/Login.svelte';
 	import Home from './pages/Home.svelte';

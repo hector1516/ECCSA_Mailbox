@@ -2,9 +2,7 @@
    src/body.css + tokens.css. Para cambiar el diseño, edita esos y
    corre: python tools/build_shell.py && python tools/sync_shell.py --all */
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
 
 :root {
 	/* Mismos valores en CSS plano (apps sin Tailwind) */
@@ -32,6 +30,21 @@
 	--z-status: 200;     /* status bar: bajo el banner, no lo tapa */
 	--z-banner: 250;     /* banner superior */
 	--z-toast: 300;      /* toasts; el modal va 400 (--z-toast + 100) */
+}
+
+@theme {
+	--color-bg: #0F172A;
+	--color-surface: #1E293B;
+	--color-surface-2: #334155;
+	--color-primary: #FF6B00;
+	--color-primary-light: #FFAE00;
+	--color-text: #F8FAFC;
+	--color-text-muted: #94A3B8;
+	--color-success: #22C55E;
+	--color-warning: #F59E0B;
+	--color-danger: #EF4444;
+	--color-info: #3B82F6;
+	--font-family: 'Outfit', system-ui, sans-serif;
 }
 
 /* ECCSA-Shell · src/body.css — CSS de componentes (sin prólogo de Tailwind).
