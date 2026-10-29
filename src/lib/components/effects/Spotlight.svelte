@@ -58,6 +58,8 @@
     position: relative;
     overflow: hidden;
     border-radius: var(--radius, 16px);
+    height: 100%;
+    display: flex;
   }
 
   .spotlight {
@@ -73,5 +75,7 @@
   .spotlight-content {
     position: relative;
     z-index: 1;
+    width: 100%;
+    height: 100%;
   }
 </style>
