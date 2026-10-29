@@ -16,7 +16,7 @@
 // lógica.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const CACHE = 'mailbox-v0.1.0';
+const CACHE = 'mailbox-v0.2.0';
 const APP_SHELL = '/index.html';
 
 // Se pre-cachea el armazón para que la app abra sin red y muestre el splash en
