@@ -5,7 +5,7 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { toasts, cerrarAviso } from '$lib/stores/toasts.js';
-	import LogoTraceLoader from '$lib/components/effects/LogoTraceLoader.svelte';
+	import SyncHeader from '$lib/components/SyncHeader.svelte';
 	import Changelog from '$lib/components/Changelog.svelte';
 	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
 	import Login from './pages/Login.svelte';
@@ -118,7 +118,7 @@
 
 {#if !splashDone}
 	<div class="splash">
-		<LogoTraceLoader size={120} />
+		<img class="splash-logo-img" src="/mailbox_logo.png" alt="Mailbox ECCSA" />
 		<div class="splash-title">Mailbox</div>
 		<div class="splash-msg">{splashMsg}</div>
 		<div class="splash-bar">
