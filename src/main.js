@@ -1,5 +1,4 @@
 import './app.css';
-import './responsive.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
 

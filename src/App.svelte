@@ -5,6 +5,7 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { toasts, cerrarAviso } from '$lib/stores/toasts.js';
+import './responsive.css';
 	import SyncHeader from '$lib/components/SyncHeader.svelte';
 	import Changelog from '$lib/components/Changelog.svelte';
 	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
