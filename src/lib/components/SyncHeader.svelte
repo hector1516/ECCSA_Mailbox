@@ -1,40 +1,34 @@
 <script>
-	/* ECCSA-Shell · banner común (referencia Svelte). ESTE ES EL ESTÁNDAR.
+	/* ECCSA-Shell �� banner comǧn (referencia Svelte). ESTE ES EL EST�?NDAR.
 	   ------------------------------------------------------------------
-	   Nació del banner de Field (que ya tenía el `.sync-header` con estado de
-	   sync, usuario, lugar y versiones) y es lo que deben pintar Field, Admon
-	   y cualquier app Svelte nueva. Ver docs/CONTRATO.md.
+	   Naci�� del banner de Field y es lo que deben pintar Field, Admon y
+	   cualquier app Svelte nueva. Ver docs/CONTRATO.md.
 
-	   Reparto de responsabilidades (para que no se duplique nada):
-	     · El SHELL manda: este markup, los textos y el CSS — que vive en
-	       src/body.css como `.sync-header`, NO en un <style> acá, porque las
+	   Reparto de responsabilidades:
+	     �� El SHELL manda: este markup, los textos y el CSS �?" que vive en
+	       src/body.css como `.sync-header`, NO en un <style> acǭ, porque las
 	       apps no compilan el scope del componente y el panel (Python sin
 	       build) tiene que compartir el mismo CSS.
-	     · La APP manda: sus stores. Acá no se importa nada del proyecto;
+	     �� La APP manda: sus stores. Acǭ no se importa nada del proyecto;
 	       el estado llega por props y el clic sale por `onsync`.
-
-	   Deliberadamente en JS plano con JSDoc (y no lang="ts"): Admon compila con
-	   vite+svelte sin preprocesador de TypeScript, y un lang="ts" le rompe el
-	   build. Field corre svelte-check igual.
 
 	   Props:
 	     estado        'offline'|'syncing'|'error'|'pending'|'idle'
 	     pendientes    number   (solo se usa con estado 'pending')
-	     usuario       string   ('' = sin sesión → no se pinta la línea de usuario)
+	     usuario       string   ('' = sin sesi��n ��' no se pinta la l��nea de usuario)
 	     lugar         'oficina'|'remoto'|'desconocido'  (si se pasa, pisa el endpoint)
 	     ip            string   (si se pasa, pisa el endpoint; va en el title)
 	     appVersion    string   (normalmente de $lib/shell.js)
 	     shellVersion  string
 	     endpoint      string   (default '/api/shell/state')
-	     fetcher       (url) => Promise   ver nota de autenticación abajo
-	     onsync        () => any  (click = disparar la sincronización de la app)
-
-	   AUTENTICACIÓN — por qué existe `fetcher`:
-	   el endpoint exige sesión, y no todas las apps autentican igual. Field y
-	   Admon mandan `Authorization: Bearer <token>`; el panel usa cookie. Un
-	   fetch() peludo desde acá solo funcionaría en el panel, así que la app le
-	   pasa su propio fetcher cuando lo necesita. Si no se pasa, se usa un fetch
-	   same-origin peludo (que es justo lo que necesita el panel).
+	     fetcher       (url) => Promise   ver nota de autenticaci��n abajo
+	     onsync        () => any  (click = disparar la sincronizaci��n de la app)
+	     titulo        string   (t��tulo de la pǭgina actual; '' = no se pinta)
+	     onBack        () => any  (si se pasa, se pinta �?�)
+	     onConfig      () => any  (si se pasa, se pinta �?�)
+	     onLogout      () => any  (si se pasa, se pinta �Y-s�)
+	     onChangelog   () => any  (si se pasa, se pinta �Y"�)
+	     showBack      boolean (default false)
 	*/
 	let {
 		estado = 'idle',
@@ -46,12 +40,15 @@
 		shellVersion = '',
 		endpoint = '/api/shell/state',
 		fetcher = null,
-		onsync = null
+		onsync = null,
+		titulo = '',
+		onBack = null,
+		onConfig = null,
+		onLogout = null,
+		onChangelog = null,
+		showBack = false
 	} = $props();
 
-	/* Lo que solo sabe el servidor: si estás en la oficina o en remoto.
-	   Fail silent a propósito: si el endpoint no responde el banner se sigue
-	   viendo igual, solo que con 📍 — (regla 4 del contrato). */
 	let lugarApi = $state('desconocido');
 	let ipApi = $state('');
 	let usuarioApi = $state('');
@@ -61,8 +58,6 @@
 		let vivo = true;
 		(async () => {
 			try {
-				/* La app manda su propio fetch si autentica con Bearer; si no,
-				   el de aquí (same-origin) que es lo que Sirve el panel. */
 				const pedir = fetcher
 					|| ((url) => fetch(url, { credentials: 'same-origin' }));
 				const r = await pedir(endpoint);
@@ -73,14 +68,11 @@
 				ipApi = d.lugar?.ip || '';
 				usuarioApi = d.user?.nombre || '';
 				versionApi = d.shell?.version || '';
-			} catch (e) {
-				/* fail silent: el shell no puede tumbar una app */
-			}
+			} catch (e) { }
 		})();
 		return () => { vivo = false; };
 	});
 
-	/* El prop pisa al endpoint cuando la app ya lo sabe. */
 	const modo = $derived(lugar || lugarApi);
 	const ipFinal = $derived(ip || ipApi);
 	const nombre = $derived(usuario || usuarioApi);
@@ -89,12 +81,11 @@
 
 	const LUGAR = {
 		oficina: { icono: '🏢', texto: 'Oficina' },
-		remoto: { icono: '🏠', texto: 'Remoto' },
-		desconocido: { icono: '📍', texto: '—' }
+		remoto: { icono: '🌐', texto: 'Remoto' },
+		desconocido: { icono: '❓', texto: '—' }
 	};
 	const lug = $derived(LUGAR[modo] || LUGAR.desconocido);
 
-	/* Orden de precedencia: sin red > sincronizando > falló > hay pendientes > al día. */
 	const effective = $derived(
 		estado === 'offline' || estado === 'syncing' || estado === 'error'
 			? estado
@@ -121,19 +112,38 @@
 	}
 </script>
 
-<button
-	class="sync-header"
-	class:offline={effective === 'offline'}
-	class:syncing={effective === 'syncing'}
-	class:has-items={effective === 'pending'}
-	onclick={() => onsync && onsync()}
->
-	<span class="dot {PUNTO[effective] || 'ok'}"></span><span>{texto()}</span>
-	{#if nombre}
-		<span class="who">
-			👤 {nombre}
-			<span class="lugar {modo}" title={ipFinal}>{lug.icono} {lug.texto}</span>
-		</span>
-	{/if}
-	<span class="vers">v{vApp} · shell {vShell}</span>
-</button>
+<div class="sync-header" onclick={() => onsync && onsync()}>
+	<!-- Izquierda: volver + título -->
+	<div class="sh-left">
+		{#if showBack && onBack}
+			<button class="sh-btn" onclick={(e) => { e.stopPropagation(); onBack(); }} title="Volver">←</button>
+		{/if}
+		{#if titulo}
+			<span class="sh-title">{titulo}</span>
+		{/if}
+	</div>
+	<!-- Centro: estado de sync -->
+	<div class="sh-center">
+		<span class="dot {PUNTO[effective] || 'ok'}"></span>
+		<span class="sh-text">{texto()}</span>
+	</div>
+	<!-- Derecha: usuario + lugar + acciones + versión -->
+	<div class="sh-right">
+		{#if nombre}
+			<span class="who">
+				👤 {nombre}
+				<span class="lugar {modo}" title={ipFinal}>{lug.icono} {lug.texto}</span>
+			</span>
+		{/if}
+		{#if onChangelog}
+			<button class="sh-btn" onclick={(e) => { e.stopPropagation(); onChangelog(); }} title="Novedades">📋</button>
+		{/if}
+		{#if onConfig}
+			<button class="sh-btn" onclick={(e) => { e.stopPropagation(); onConfig(); }} title="Configuración">⚙️</button>
+		{/if}
+		{#if onLogout}
+			<button class="sh-btn" onclick={(e) => { e.stopPropagation(); onLogout(); }} title="Salir">🚪</button>
+		{/if}
+		<span class="vers">v{vApp} · shell {vShell}</span>
+	</div>
+</div>

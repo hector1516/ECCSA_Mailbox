@@ -492,21 +492,125 @@ animation: pulse-offline 2s infinite;
 	align-items: center;
 	justify-content: center;
 	gap: 0.35rem;
-	flex-wrap: wrap;
+	flex-wrap: nowrap;
 	width: 100%;
 	/* Compacto: padding reducido + safe-area-inset-top para notch/Dynamic Island */
-	padding: calc(0.3rem + env(safe-area-inset-top)) 0.75rem 0.3rem;
-	background: rgba(30, 41, 59, 0.58);
-	-webkit-backdrop-filter: blur(12px) saturate(1.2);
-	backdrop-filter: blur(12px) saturate(1.2);
+	padding: calc(0.3rem + env(safe-area-inset-top)) calc(0.75rem + env(safe-area-inset-right)) 0.3rem calc(0.75rem + env(safe-area-inset-left));
+	/* Más transparente: 0.42 en vez de 0.58 */
+	background: rgba(30, 41, 59, 0.42);
+	-webkit-backdrop-filter: blur(16px) saturate(1.3);
+	backdrop-filter: blur(16px) saturate(1.3);
 	color: var(--color-text);
 	border: none;
-	border-bottom: 1px solid var(--color-line);
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 	font-size: 0.75rem;
 	font-weight: 600;
 	font-family: inherit;
 	line-height: 1.3;
 	cursor: pointer;
+}
+
+/* Sub-elementos del sync-header */
+.sync-header .sh-left {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	flex-shrink: 0;
+	min-width: 0;
+}
+.sync-header .sh-left .sh-btn {
+	background: none;
+	border: none;
+	color: var(--color-text);
+	font-size: 1.1rem;
+	cursor: pointer;
+	padding: 0.15rem 0.35rem;
+	min-width: 32px;
+	min-height: 32px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-xs);
+	transition: background 0.15s;
+}
+.sync-header .sh-left .sh-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.sync-header .sh-left .sh-title {
+	font-size: 0.85rem;
+	font-weight: 700;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 30vw;
+}
+.sync-header .sh-center {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	flex: 1;
+	justify-content: center;
+	min-width: 0;
+	overflow: hidden;
+}
+.sync-header .sh-center .sh-text {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 0.72rem;
+}
+.sync-header .sh-right {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	flex-shrink: 0;
+	min-width: 0;
+}
+.sync-header .sh-right .sh-btn {
+	background: none;
+	border: none;
+	color: var(--color-text-muted);
+	font-size: 1rem;
+	cursor: pointer;
+	padding: 0.15rem 0.3rem;
+	min-width: 32px;
+	min-height: 32px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-xs);
+	transition: background 0.15s, color 0.15s;
+}
+.sync-header .sh-right .sh-btn:hover {
+	background: rgba(255, 255, 255, 0.08);
+	color: var(--color-text);
+}
+.sync-header .sh-right .who {
+	font-size: 0.65rem;
+	font-weight: 400;
+	color: var(--color-text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 25vw;
+}
+.sync-header .sh-right .who .lugar { margin-left: 0.25rem; font-weight: 600; }
+.sync-header .sh-right .lugar,
+.sync-header .sh-right .vers {
+	font-size: 0.68rem;
+	font-weight: 500;
+	color: var(--color-text-muted);
+	white-space: nowrap;
+}
+.sync-header .sh-right .lugar.oficina { color: var(--color-success); }
+.sync-header .sh-right .lugar.remoto { color: var(--color-primary-light); }
+.sync-header .sh-right .vers { margin-left: 0.35rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+	.sync-header .sh-right .vers { display: none; }
+	.sync-header .sh-right .who { max-width: 18vw; }
+	.sync-header .sh-left .sh-title { max-width: 20vw; }
+}
+@media (max-width: 480px) {
+	.sync-header .sh-center .sh-text { display: none; }
+	.sync-header .sh-right .who { display: none; }
 }
 /* Los fondos de estado quedan un punto más opaque que el de reposo: el banner
    en reposo puede ser bien translúcido, pero un aviso o un error tienen que
