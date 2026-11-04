@@ -25,16 +25,11 @@
 	--radius-sm: 12px;   /* botones y campos */
 	--radius-xs: 10px;
 	--nav-h: 64px;       /* alto de la tab bar inferior */
-	--tap: 44px;         /* objetivo táctil mínimo (Apple HIG) */
+	--tap: 44px;         /* objetivo táctil mínimo */
 	--z-nav: 100;        /* tab bar inferior */
 	--z-status: 200;     /* status bar: bajo el banner, no lo tapa */
 	--z-banner: 250;     /* banner superior */
 	--z-toast: 300;      /* toasts; el modal va 400 (--z-toast + 100) */
-	/* Safe areas para notch/Dynamic Island (iPhone) y home indicator */
-	--safe-top: env(safe-area-inset-top, 0px);
-	--safe-bottom: env(safe-area-inset-bottom, 0px);
-	--safe-left: env(safe-area-inset-left, 0px);
-	--safe-right: env(safe-area-inset-right, 0px);
 }
 
 @theme {
@@ -216,7 +211,7 @@ textarea.input {
 	justify-content: center;
 	gap: 0.5rem;
 	padding: 0.4rem 1rem;
-	font-size: 0.75rem;
+	font-size: 0.8rem;
 	font-weight: 600;
 	transition: all 0.3s ease;
 }
@@ -422,14 +417,14 @@ animation: pulse-offline 2s infinite;
 	gap: 0.45rem;
 	flex-wrap: wrap;
 	width: 100%;
-	padding: calc(0.4rem + env(safe-area-inset-top)) 1rem 0.4rem;
-	background: rgba(30, 41, 59, 0.50);
+	padding: calc(0.55rem + env(safe-area-inset-top)) 1rem 0.55rem;
+	background: rgba(30, 41, 59, 0.58);
 	-webkit-backdrop-filter: blur(12px) saturate(1.2);
 	backdrop-filter: blur(12px) saturate(1.2);
 	color: var(--color-text);
 	border: none;
 	border-bottom: 1px solid var(--color-line);
-	font-size: 0.75rem;
+	font-size: 0.8rem;
 	font-weight: 600;
 	font-family: inherit;
 	/* El banner puede partirse en dos lineas (estado arriba, usuario abajo,
@@ -698,8 +693,8 @@ animation: pulse-offline 2s infinite;
 	   ni que tan ancha sea la columna, y los min-height de .module-title /
 	   .module-desc son los que garantizan que todas las tarjetas de una fila
 	   midan lo mismo aunque un titulo ocupe 2 lineas y otro 1. */
-	aspect-ratio: 1;
-	max-height: 230px;
+	aspect-ratio: auto;
+	max-height: none;
 	/* 130px es solo el piso para una tarjeta con muy poco texto; el alto
 	   real (~166px) lo saca el contenido. */
 	min-height: 130px;
