@@ -5,11 +5,10 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { toasts, cerrarAviso } from '$lib/stores/toasts.js';
-import './responsive.css';
-	import SyncHeader from '$lib/components/SyncHeader.svelte';
+	import LogoTraceLoader from '$lib/components/effects/LogoTraceLoader.svelte';
 	import Changelog from '$lib/components/Changelog.svelte';
 	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
-		import Login from './pages/Login.svelte';
+	import Login from './pages/Login.svelte';
 	import Home from './pages/Home.svelte';
 	import Firmas from './pages/Firmas.svelte';
 	import Notificaciones from './pages/Notificaciones.svelte';
@@ -98,7 +97,6 @@ import './responsive.css';
 		}
 	}
 
-
 	function shellFetch(url) {
 		const token = auth.getToken();
 		return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -120,7 +118,7 @@ import './responsive.css';
 
 {#if !splashDone}
 	<div class="splash">
-		<img class="splash-logo-img" src="/mailbox_logo.png" alt="Mailbox ECCSA" />
+		<LogoTraceLoader size={120} />
 		<div class="splash-title">Mailbox</div>
 		<div class="splash-msg">{splashMsg}</div>
 		<div class="splash-bar">
