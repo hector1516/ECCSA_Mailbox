@@ -1,29 +1,27 @@
 <script>
 	/* ECCSA-Shell �� banner comǧn (referencia Svelte). ESTE ES EL EST�?NDAR.
 	   ------------------------------------------------------------------
-	   Naci�� del banner de Field y es lo que deben pintar Field, Admon y
-	   cualquier app Svelte nueva. Ver docs/CONTRATO.md.
+	   Banner universal: estado de sync + usuario + lugar + versi��n + botones
+	   de navegaci��n (volver, config, novedades, salir). Todo en una sola
+	   barra semitransparente con blur, compacta y notch-aware.
 
 	   Reparto de responsabilidades:
 	     �� El SHELL manda: este markup, los textos y el CSS �?" que vive en
-	       src/body.css como `.sync-header`, NO en un <style> acǭ, porque las
-	       apps no compilan el scope del componente y el panel (Python sin
-	       build) tiene que compartir el mismo CSS.
-	     �� La APP manda: sus stores. Acǭ no se importa nada del proyecto;
-	       el estado llega por props y el clic sale por `onsync`.
+	       src/body.css como `.sync-header`, NO en un <style> acǭ.
+	     �� La APP manda: sus stores y los botones internos del m��dulo.
 
 	   Props:
 	     estado        'offline'|'syncing'|'error'|'pending'|'idle'
-	     pendientes    number   (solo se usa con estado 'pending')
-	     usuario       string   ('' = sin sesi��n ��' no se pinta la l��nea de usuario)
-	     lugar         'oficina'|'remoto'|'desconocido'  (si se pasa, pisa el endpoint)
-	     ip            string   (si se pasa, pisa el endpoint; va en el title)
-	     appVersion    string   (normalmente de $lib/shell.js)
+	     pendientes    number
+	     usuario       string   ('' = sin sesi��n)
+	     lugar         'oficina'|'remoto'|'desconocido'
+	     ip            string
+	     appVersion    string
 	     shellVersion  string
 	     endpoint      string   (default '/api/shell/state')
-	     fetcher       (url) => Promise   ver nota de autenticaci��n abajo
-	     onsync        () => any  (click = disparar la sincronizaci��n de la app)
-	     titulo        string   (t��tulo de la pǭgina actual; '' = no se pinta)
+	     fetcher       (url) => Promise
+	     onsync        () => any
+	     titulo        string   (t��tulo de la pǭgina; '' = no se pinta)
 	     onBack        () => any  (si se pasa, se pinta �?�)
 	     onConfig      () => any  (si se pasa, se pinta �?�)
 	     onLogout      () => any  (si se pasa, se pinta �Y-s�)
