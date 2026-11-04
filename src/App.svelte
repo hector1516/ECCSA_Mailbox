@@ -9,7 +9,7 @@ import './responsive.css';
 	import SyncHeader from '$lib/components/SyncHeader.svelte';
 	import Changelog from '$lib/components/Changelog.svelte';
 	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
-	import Login from './pages/Login.svelte';
+		import Login from './pages/Login.svelte';
 	import Home from './pages/Home.svelte';
 	import Firmas from './pages/Firmas.svelte';
 	import Notificaciones from './pages/Notificaciones.svelte';
@@ -97,6 +97,7 @@ import './responsive.css';
 			/* si falla, el banner igual queda en su estado */
 		}
 	}
+
 
 	function shellFetch(url) {
 		const token = auth.getToken();
