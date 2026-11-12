@@ -16,6 +16,7 @@
 	import Mensaje from './pages/Mensaje.svelte';
 	import Redactar from './pages/Redactar.svelte';
 	import Reglas from './pages/Reglas.svelte';
+	import BusquedaGlobal from './pages/BusquedaGlobal.svelte';
 
 	// Los segmentos de la ruta, una vez. El dispatcher de abajo los compara por
 	// posición en vez de con `startsWith`/`endsWith`: la ruta del mensaje es
@@ -179,6 +180,8 @@
 			<Redactar onSalir={cerrarSesion} />
 		{:else if $path === '/notificaciones'}
 			<Notificaciones onSalir={cerrarSesion} />
+		{:else if $path === '/busqueda-global'}
+			<BusquedaGlobal onSalir={cerrarSesion} />
 		{:else if !$auth.user}
 			<!-- Ruta protegida sin sesión: se manda al login y no se renderiza nada
 			     para que no se vea un instante la pantalla vacía. -->

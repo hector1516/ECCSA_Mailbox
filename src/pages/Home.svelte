@@ -24,6 +24,11 @@
 		{ icon: '🔔', title: 'Alertas', desc: 'Notificaciones en el teléfono', path: '/notificaciones' }
 	];
 
+	const esHector = $derived(auth.getUser()?.email === 'hector.pena@ecc-sa.com.mx');
+	const HERRAMIENTAS_EXTRA = esHector
+		? [{ icon: '🔍', title: 'Búsqueda Global', desc: 'Buscar en todos los correos', path: '/busqueda-global' }]
+		: [];
+
 	onMount(async () => {
 		if (!auth.isLoggedIn()) {
 			navigate('/login', { replace: true });
@@ -116,6 +121,14 @@
 			{/each}
 
 			{#each HERRAMIENTAS as h}
+				<button class="module-card" onclick={() => ir(h.path)}>
+					<span class="module-icon">{h.icon}</span>
+					<span class="module-title">{h.title}</span>
+					<span class="module-desc">{h.desc}</span>
+				</button>
+			{/each}
+
+			{#each HERRAMIENTAS_EXTRA as h}
 				<button class="module-card" onclick={() => ir(h.path)}>
 					<span class="module-icon">{h.icon}</span>
 					<span class="module-title">{h.title}</span>

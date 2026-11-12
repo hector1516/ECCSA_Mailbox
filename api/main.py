@@ -604,6 +604,92 @@ def listar_mensajes(
     }
 
 
+def _es_hector(usuario: dict) -> bool:
+    """Solo hector.pena@ecc-sa.com.mx tiene acceso al modulo de busqueda global."""
+    email = (usuario.get("Email") or "").strip().lower()
+    return email == "hector.pena@ecc-sa.com.mx"
+
+
+@app.get("/api/mailbox/busqueda-global")
+def busqueda_global(
+    usuario: dict = Depends(require_mailbox),
+    buscar: str = "",
+    limite: int = 50,
+    pagina: int = 1,
+):
+    """
+    Busqueda global en TODOS los correos de la base de datos.
+    Solo disponible para hector.pena@ecc-sa.com.mx.
+
+    Busca en todas las columnas de HUB_MailboxMensajes: Asunto, RemitenteNombre,
+    RemitenteEmail, ParaTexto, CcTexto, Extracto, Carpeta, Etiqueta, MessageId.
+    """
+    if not _es_hector(usuario):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta funcion.")
+
+    buscar = (buscar or "").strip()[:200]
+    limite = max(1, min(int(limite or 50), 200))
+    pagina = max(1, int(pagina or 1))
+    offset = (pagina - 1) * limite
+
+    if not buscar:
+        condiciones = ["1=1"]
+        params = []
+    else:
+        patron = "%" + buscar + "%"
+        condiciones = [
+            "(Asunto LIKE %s OR RemitenteNombre LIKE %s OR RemitenteEmail LIKE %s "
+            "OR ParaTexto LIKE %s OR CcTexto LIKE %s OR Extracto LIKE %s "
+            "OR Carpeta LIKE %s OR Etiqueta LIKE %s OR MessageId LIKE %s)"
+        ]
+        params = [patron] * 9
+
+    where = " AND ".join(condiciones)
+
+    total_fila = _una("SELECT COUNT(*) AS Total FROM HUB_MailboxMensajes WHERE " + where, tuple(params))
+    total = int(total_fila["Total"]) if total_fila else 0
+
+    filas = _filas(
+        "SELECT m.Id, m.IdCuenta, m.RemitenteNombre, m.RemitenteEmail, m.Asunto, m.Extracto, "
+        "       m.FechaCorreo, m.Visto, m.Marcado, m.TieneAdjuntos, m.NumAdjuntos, m.Carpeta, "
+        "       m.Etiqueta, m.ParaTexto, m.CcTexto, c.Alias AS CuentaAlias, c.Email AS CuentaEmail "
+        "FROM HUB_MailboxMensajes m "
+        "LEFT JOIN HUB_MailboxCuentas c ON c.Id = m.IdCuenta "
+        "WHERE " + where + " "
+        "ORDER BY m.FechaCorreo DESC, m.Id DESC "
+        "OFFSET %s ROWS FETCH NEXT %s ROWS ONLY",
+        tuple(params + [offset, limite]),
+    )
+
+    return {
+        "mensajes": [
+            {
+                "id": f["Id"],
+                "id_cuenta": f.get("IdCuenta"),
+                "cuenta_alias": f.get("CuentaAlias"),
+                "cuenta_email": f.get("CuentaEmail"),
+                "remitente_nombre": f.get("RemitenteNombre"),
+                "remitente_email": f.get("RemitenteEmail"),
+                "asunto": f.get("Asunto"),
+                "extracto": f.get("Extracto"),
+                "fecha_correo": f["FechaCorreo"].strftime("%Y-%m-%d %H:%M") if f.get("FechaCorreo") else "",
+                "visto": bool(f.get("Visto")),
+                "marcado": bool(f.get("Marcado")),
+                "tiene_adjuntos": bool(f.get("TieneAdjuntos")),
+                "num_adjuntos": f.get("NumAdjuntos"),
+                "carpeta": f.get("Carpeta"),
+                "etiqueta": f.get("Etiqueta"),
+                "para": f.get("ParaTexto"),
+                "cc": f.get("CcTexto"),
+            }
+            for f in filas
+        ],
+        "total": total,
+        "pagina": pagina,
+        "limite": limite,
+    }
+
+
 def _no_leidos_cuenta(cuenta_id: int) -> int:
     """
     Cuántos correos sin leer tiene la cuenta, en todas sus carpetas.
