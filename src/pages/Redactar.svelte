@@ -103,7 +103,7 @@
 			const r = await api.post(`/mailbox/firmas/${destino}/imagenes`, fd);
 			// En la vista previa el src se cambia a la URL; al enviar, el worker
 			// lo cambia a cid:. Por eso el HTML guardado siempre lleva cid:.
-			_insertar(`<img src="${r.url}" alt="${(r.html.match(/alt="([^"]*)"/) || [, 'imagen'])[1]}" style="max-width:100%">`);
+			_insertar(`<img src="${r.url}" alt="${(r.html.match(/alt="([^"]*)"/) || [, 'imagen'])[1]}" style="max-width:100%" loading="lazy">`);
 			avisar('Imagen insertada', 'success');
 		} catch (err) {
 			avisar(err.message || 'No se pudo subir la imagen', 'error');

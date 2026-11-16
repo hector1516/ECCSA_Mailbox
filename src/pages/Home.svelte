@@ -68,7 +68,7 @@
 	<div class="header">
 		<div class="brand-col">
 			<h1 class="brand">
-				<img class="brand-logo" src="/mailbox_marca.png" alt="Mailbox" /> Mailbox
+				<img class="brand-logo" src="/mailbox_marca.png" alt="Mailbox" loading="lazy" /> Mailbox
 			</h1>
 		</div>
 		<!-- Barra de acciones del shell. Solo se pasan los manejadores que existen:

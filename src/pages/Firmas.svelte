@@ -114,7 +114,7 @@
 
 	/** Imagen del logo de ECCSA, ya insertada como cid:. */
 	function _insertarLogo() {
-		_insertar('<img src="cid:logo@eccsa" alt="ECCSA" height="60" style="display:block;margin:0 0 10px">');
+		_insertar('<img src="cid:logo@eccsa" alt="ECCSA" height="60" style="display:block;margin:0 0 10px" loading="lazy">');
 	}
 
 	/** Separador horizontal, que es lo más pedido en una firma. */
@@ -126,7 +126,7 @@
 	function _tabla() {
 		_insertar(
 			'<table cellpadding="0" cellspacing="0" style="border-collapse:collapse">' +
-			'<tr><td style="padding-right:16px;vertical-align:top"><img src="cid:logo@eccsa" alt="Logo" height="52"></td>' +
+			'<tr><td style="padding-right:16px;vertical-align:top"><img src="cid:logo@eccsa" alt="Logo" height="52" loading="lazy"></td>' +
 			'<td style="vertical-align:top"><strong style="color:#0F172A">Nombre Apellido</strong><br>' +
 			'<span style="color:#64748B;font-size:12px">Puesto · Área</span><br>' +
 			'<span style="color:#64748B;font-size:12px">telefono · correo@ecc-sa.com.mx</span></td>' +

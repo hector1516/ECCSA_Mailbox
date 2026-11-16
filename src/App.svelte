@@ -8,6 +8,7 @@
 	import LogoTraceLoader from '$lib/components/effects/LogoTraceLoader.svelte';
 	import Changelog from '$lib/components/Changelog.svelte';
 	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
+	import { logError, ERROR_CODES } from '$lib/audit.js';
 	import Login from './pages/Login.svelte';
 	import Home from './pages/Home.svelte';
 	import Firmas from './pages/Firmas.svelte';
@@ -48,6 +49,16 @@
 			await new Promise((r) => setTimeout(r, 800));
 		}
 		splashDone = true;
+
+		// Captura global de errores no manejados (MBX-UI-001 / MBX-NET-001)
+		if (typeof window !== 'undefined') {
+			window.addEventListener('error', (ev) => {
+				try { logError(ERROR_CODES.UI_ERROR, 'app', ev.message || 'window error', { filename: ev.filename, lineno: ev.lineno }); } catch {}
+			});
+			window.addEventListener('unhandledrejection', (ev) => {
+				try { logError(ERROR_CODES.NET_ERROR, 'app', String(ev.reason?.message || ev.reason || 'unhandled rejection'), { reason: String(ev.reason) }); } catch {}
+			});
+		}
 
 		auth.init();
 		const actual = window.location.pathname;
@@ -204,7 +215,7 @@
 	</div>
 {:else}
 	<div class="splash">
-		<img class="splash-logo-img" src="/mailbox_logo.png" alt="Mailbox ECCSA" />
+		<img class="splash-logo-img" src="/mailbox_logo.png" alt="Mailbox ECCSA" loading="lazy" />
 		<div class="splash-title">Mailbox</div>
 	</div>
 {/if}

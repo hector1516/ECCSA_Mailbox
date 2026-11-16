@@ -110,7 +110,7 @@
 
 <div class="login-page">
 	<div class="login-card">
-		<img class="login-logo" src="/mailbox_logo.png" alt="Mailbox ECCSA" />
+		<img class="login-logo" src="/mailbox_logo.png" alt="Mailbox ECCSA" loading="lazy" />
 		<h1 class="login-title">Mailbox</h1>
 		<p class="login-sub">Buzón corporativo ECCSA</p>
 
