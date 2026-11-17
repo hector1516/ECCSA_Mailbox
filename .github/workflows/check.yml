@@ -25,6 +25,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      PYTHONIOENCODING: utf-8
     timeout-minutes: 15
 
     steps:

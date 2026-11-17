@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tools/test_sanitizador.py — pruebas del sanitizador de HTML de firmas.
+tools/test_sanitizador.py - pruebas del sanitizador de HTML de firmas.
 
 Por qué existe: el sanitizador es la frontera de seguridad del módulo de
 firmas. El HTML que guarda pasa a formar parte del correo que sale de la
@@ -60,7 +60,7 @@ VALIDOS = [
     ("style_bueno", '<div style="color:#FF6B00;font-weight:bold">x</div>', ["color:#FF6B00"]),
     ("tabla_ancho", '<table width="100%" cellpadding="0"><tr><td>x</td></tr></table>', ['width="100%"', 'cellpadding="0"']),
     ("lista",       "<ul><li>uno</li><li>dos</li></ul>",          ["<ul>", "<li>"]),
-    # ── Elementos VACÍOS que se descartan: el resto del documento debe sobrevivir.
+    # -- Elementos VACÍOS que se descartan: el resto del documento debe sobrevivir.
     # Estos tres son la regresión del bug que dejó TODOS los correos en blanco.
     # El envoltorio que escribe el worker es exactamente el primero.
     ("meta_charset",
