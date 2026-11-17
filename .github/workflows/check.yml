@@ -84,7 +84,6 @@ jobs:
       - name: Instalar dependencias de Python
         run: |
           set -euo pipefail
-          pip install --quiet -r requirements.txt
           python3 -m py_compile api/main.py
 
       - name: py_compile del backend
