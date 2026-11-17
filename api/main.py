@@ -3320,29 +3320,6 @@ except Exception as _e:  # noqa: BLE001
     print(f"[main] la SPA no se montó ({_e}); la API sigue funcionando", flush=True)
 
 
-@app.post("/api/debug/log")
-def debug_log(body: dict, usuario: dict = Depends(get_current_user)):
-    """Registra un error de frontend de Mailbox (MBX-*) en HUB_DebugLog."""
-    try:
-        import json as _j
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO HUB_DebugLog (Codigo, App, Modulo, Mensaje, Contexto, Url, Usuario, Fecha) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, GETDATE())",
-            (str(body.get("codigo", ""))[:30], "MBX", str(body.get("modulo", ""))[:10],
-             str(body.get("mensaje", ""))[:500],
-             _j.dumps(body.get("contexto")) if body.get("contexto") else None,
-             str(body.get("url", ""))[:500], usuario.get("email", "")),
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:100]}
-
-
 if __name__ == "__main__":
     import uvicorn
 
