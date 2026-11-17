@@ -8,6 +8,7 @@
 	import LogoTraceLoader from '$lib/components/effects/LogoTraceLoader.svelte';
 	import Changelog from '$lib/components/Changelog.svelte';
 	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
+	import SyncHeader from '$lib/components/SyncHeader.svelte';
 	import { logError, ERROR_CODES } from '$lib/audit.js';
 	import Login from './pages/Login.svelte';
 	import Home from './pages/Home.svelte';
