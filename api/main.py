@@ -3228,7 +3228,7 @@ try:
     # vez que se agrega una ruta, que es justo cuando hay que acordarse.
     _SPA_ROUTES = {
         "firmas", "notificaciones", "cuenta", "login", "reglas", "redactar",
-        "mensaje",
+        "mensaje", "busqueda-global",
     }
     # Rutas con un identificador adentro, del tipo `/mensaje/424`. Van aparte
     # porque la comparación es sobre el PRIMER segmento: `/mensaje/424` tiene que
