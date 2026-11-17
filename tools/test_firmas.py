@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tools/test_firmas.py — pruebas de la lógica de firmas, firmas por token.
+tools/test_firmas.py - pruebas de la lógica de firmas, firmas por token.
 
 Por qué un archivo propio y no más casos en `test_sanitizador.py`: el
 sanitizador prueba QUÉ HTML se acepta. Estas pruebas prueban una propiedad que
@@ -31,8 +31,8 @@ def _cargar_main():
     """Importa api/main.py con `pymssql` simulado.
 
     Igual que `test_sanitizador.py`: lo único que bloquea el import sin base de
-    datos es `pymssql`. `fastapi` sí tiene que estar —está en requirements y
-    check.yml lo instala—, porque main.py importa nombres concretos de ahí y
+    datos es `pymssql`. `fastapi` sí tiene que estar -está en requirements y
+    check.yml lo instala-, porque main.py importa nombres concretos de ahí y
     simularlo no sirve de nada.
     """
     sys.modules.setdefault("pymssql", types.ModuleType("pymssql"))
@@ -134,4 +134,4 @@ print("\n" + "=" * 70)
 if fallos:
     print(f"FALLARON {len(fallos)}: {', '.join(fallos)}")
     sys.exit(1)
-print("OK · todos los casos")
+print("OK - todos los casos")
