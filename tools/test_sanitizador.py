@@ -120,7 +120,7 @@ def main() -> int:
             print(f"         salida:  {salida}")
             fallos += 1
         else:
-            print(f"  ok     {nombre:20} → {salida[:44]}")
+            print(f"  ok     {nombre:20} -> {salida[:44]}")
 
     print("\n[2] HTML legítimo que debe SOBREVIVIR intacto")
     for nombre, entrada, esperados in VALIDOS:
@@ -132,7 +132,7 @@ def main() -> int:
             print(f"         salida:  {salida}")
             fallos += 1
         else:
-            print(f"  ok     {nombre:20} → {salida[:44]}")
+            print(f"  ok     {nombre:20} -> {salida[:44]}")
 
     print("\n[3] Texto plano (fallback para clientes sin HTML)")
     t1 = MB._a_texto_plano("<p>Saludos,</p><p><b>Juan</b></p><style>x{}</style>")
@@ -141,12 +141,12 @@ def main() -> int:
         print(f"  FALLA  texto plano con style: {t1!r}")
         fallos += 1
     else:
-        print(f"  ok     descarta contenido de <style> → {t1!r}")
+        print(f"  ok     descarta contenido de <style> -> {t1!r}")
     if t2 != "A\nB":
         print(f"  FALLA  texto plano de tabla: {t2!r}")
         fallos += 1
     else:
-        print(f"  ok     celdas de tabla → {t2!r}")
+        print(f"  ok     celdas de tabla -> {t2!r}")
 
     print("\n[4] HTML roto no debe guardar nada a medias")
     for nombre, entrada in [("vacío", ""), ("nulo", None), ("sin cerrar", "<p><b>sin cierre")]:
@@ -155,7 +155,7 @@ def main() -> int:
             print(f"  FALLA  {nombre}: devolvió None en vez de str")
             fallos += 1
         else:
-            print(f"  ok     {nombre:12} → {str(salida)[:44]!r}")
+            print(f"  ok     {nombre:12} -> {str(salida)[:44]!r}")
 
     print("\n" + "=" * 72)
     total = len(casos_malos) + len(VALIDOS) + 5

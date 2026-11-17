@@ -81,8 +81,8 @@ chk("comentario que empieza con GO no parte",
     len(am.trocear("SELECT 1\n-- GO aqui\nSELECT 2")) == 1)
 
 print("\n=== lotes vacíos y de solo comentarios ===")
-chk("archivo vacío → 0 lotes", len(am.trocear("")) == 0)
-chk("solo espacios → 0 lotes", len(am.trocear("   \n\n  ")) == 0)
+chk("archivo vacío -> 0 lotes", len(am.trocear("")) == 0)
+chk("solo espacios -> 0 lotes", len(am.trocear("   \n\n  ")) == 0)
 chk("lote de solo comentarios se descarta",
     len(am.trocear("-- nada que ejecutar\nGO\n")) == 0)
 chk("contenido real entre comentarios sí se queda",
