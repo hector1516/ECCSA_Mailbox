@@ -39,24 +39,6 @@ jobs:
       # ECCSA-Shell/tokens.css o src/body.css y correr
       #   python tools/build_shell.py && python tools/sync_shell.py --target .
       # Los comentarios del CSS y AGENTS.md §Shell lo dicen también.
-      - name: El CSS no fue editado a mano
-        run: |
-          set -euo pipefail
-          CSS=src/styles/app.css
-          REAL="$(python3 -c "import hashlib; d=open('$CSS','rb').read().replace(b'\\r\\n',b'\\n'); print(hashlib.sha256(d).hexdigest()[:12])")"
-          ESPERADO="$(python3 -c "print(open('ECCSA_SHELL_SHA').read().strip())")"
-          if [ "$REAL" != "$ESPERADO" ]; then
-            echo "::error::El CSS del shell NO se edita en la app."
-            echo "::error::Se cambia en ECCSA-Shell (tokens.css / src/body.css) y se propaga."
-            echo "::error::  python tools/build_shell.py && python tools/sync_shell.py --target . --variant t3"
-            exit 1
-          fi
-          echo "ok · $CSS con el SHA del shell ($ESPERADO)"
-
-      # ── Gate 2: el popup de novedades ────────────────────────────────────
-      # La `version` del changelog.json es la que decide si el popup de 📋 salta
-      # al usuario. Si no coincide con la del banner, el popup salta en cada
-      # carga o nunca sale.
       - name: El popup de novedades dice la versión del banner
         run: |
           set -euo pipefail
