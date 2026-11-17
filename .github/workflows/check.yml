@@ -43,8 +43,8 @@ jobs:
         run: |
           set -euo pipefail
           CSS=src/styles/app.css
-          ESPERADO="$(cat ECCSA_SHELL_SHA)"
-          REAL="$(sha256sum "$CSS" | cut -c1-12)"
+          ESPERADO="$(sed 's/\r$//' ECCSA_SHELL_SHA | tr -d '\n')
+          REAL="$(sed 's/\r$//' "$CSS" | sha256sum | cut -c1-12)"
           if [ "$REAL" != "$ESPERADO" ]; then
             echo "::error::El CSS del shell NO se edita en la app."
             echo "::error::Se cambia en ECCSA-Shell (tokens.css / src/body.css) y se propaga."
