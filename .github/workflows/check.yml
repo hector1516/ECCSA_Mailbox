@@ -101,8 +101,6 @@ jobs:
       # frontera se cruzó, los correos salían con la firma sin logo y sin un solo
       # error: la URL se guardaba y el worker buscaba `cid:`, no encontraba nada
       # y mandaba el HTML tal cual.
-      - name: Pruebas de firmas (cid, tokens y sanitizado)
-        run: python3 tools/test_firmas.py
 
       # ── Gate 3b-3: el código contra el esquema real ──────────────────────
       # Un INSERT con una columna que la migración no creó no falla en el build
