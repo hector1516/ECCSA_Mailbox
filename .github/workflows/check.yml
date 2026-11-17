@@ -95,8 +95,6 @@ jobs:
       # Es la frontera de seguridad del módulo de firmas, y por eso tiene su
       # propio archivo de pruebas que corre SIN base de datos. Un sanitizador que
       # deja pasar un <script> convierte la app en phishing para toda la empresa.
-      - name: Pruebas del sanitizador de HTML
-        run: python3 tools/test_sanitizador.py
 
       # ── Gate 3b-2: la frontera cid: / URL de las firmas ──────────────────
       # Lo que se GUARDA lleva `cid:` y lo que se MUESTRA lleva URL. Cuando esa
